@@ -149,6 +149,18 @@ class SessionTests(unittest.TestCase):
     def test_process_runner_is_the_default(self):
         self.assertIsInstance(ProcessRunner(), ProcessRunner)
 
+    def test_with_env_overrides_and_keeps_the_devices(self):
+        runner = FakeRunner(responses={"hyprctl cursorpos": "1,2"})
+        session = self.make(runner=runner)
+
+        other = session.with_env({"HYPRLAND_INSTANCE_SIGNATURE": "sig_2"})
+        other.run(["hyprctl", "cursorpos"])
+
+        self.assertEqual(other.env()["HYPRLAND_INSTANCE_SIGNATURE"], "sig_2")
+        self.assertEqual(runner.calls[-1][:2], ["hyprctl", "cursorpos"])
+        self.assertEqual(
+            runner.environments[-1]["HYPRLAND_INSTANCE_SIGNATURE"], "sig_2")
+
 
 if __name__ == "__main__":
     unittest.main()

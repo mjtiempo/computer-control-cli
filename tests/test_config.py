@@ -28,6 +28,11 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(Config(env={"CCC_LOG_TEXT": "full"}).log_text(), "full")
         self.assertEqual(Config(env={"CCC_LOG_TEXT": "junk"}).log_text(), "preview")
 
+    def test_log_enabled_by_default_and_off_by_env(self):
+        self.assertTrue(Config(env={}).log_enabled())
+        self.assertFalse(Config(env={"CCC_LOG": "off"}).log_enabled())
+        self.assertFalse(Config(env={"CCC_LOG": "OFF"}).log_enabled())
+
     def test_env_defaults_to_the_process_environment(self):
         self.assertIsInstance(Config().log_path(), str)
 

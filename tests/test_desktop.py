@@ -296,6 +296,47 @@ class DesktopWaitTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, "wait-timeout")
 
+    def test_title_and_class_filters(self):
+        desktop, _ = make_desktop()
+
+        self.assertTrue(desktop.wait(title="kate", timeout=0).verified)
+        self.assertTrue(desktop.wait(klass="foot", timeout=0).verified)
+        with self.assertRaises(ControlError):
+            desktop.wait(title="nope", timeout=0)
+
+    def test_excluded_addresses_are_ignored(self):
+        desktop, _ = make_desktop()
+
+        result = desktop.wait(exclude={"0xaaa1"}, timeout=0)
+
+        self.assertTrue(result.verified)
+        self.assertEqual(result.details["window"]["address"], "0xbbb2")
+
+    def test_new_only_has_nothing_new_to_find(self):
+        desktop, _ = make_desktop()
+
+        with self.assertRaises(ControlError) as caught:
+            desktop.wait(new_only=True, timeout=0)
+
+        self.assertEqual(caught.exception.code, "wait-timeout")
+
+    def test_stable_needs_consecutive_reads(self):
+        desktop, _ = make_desktop()
+
+        result = desktop.wait("class:foot", timeout=1, poll=0.001, stable=3)
+        with self.assertRaises(ControlError):
+            desktop.wait("class:foot", timeout=0, stable=3)
+
+        self.assertEqual(result.details["stable"], 3)
+
+    def test_wait_without_a_spec_matches_any_window(self):
+        desktop, _ = make_desktop()
+
+        result = desktop.wait(timeout=0)
+
+        self.assertTrue(result.verified)
+        self.assertEqual(result.details["window"]["address"], "0xaaa1")
+
 
 if __name__ == "__main__":
     unittest.main()

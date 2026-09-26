@@ -29,6 +29,8 @@ class ActionLog:
     def write(self, action: str, ok: bool = True,
               args: Optional[list] = None, code: Optional[str] = None,
               detail: Optional[str] = None, text: Optional[str] = None) -> None:
+        if not self._config.log_enabled():
+            return
         entry: dict[str, Any] = {"ts": self.timestamp(), "action": action,
                                  "ok": bool(ok)}
         if args is not None:
@@ -57,25 +59,44 @@ class ActionLog:
             return {"text": text}
         return {"text_chars": len(text), "text_preview": text[:PREVIEW_CHARS]}
 
-    def entries(self, count: int = 50) -> list[dict]:
-        """The last ``count`` entries, oldest first; bad lines are skipped."""
+    def entries(self, count: int = 50,
+                since: Optional[str] = None) -> list[dict]:
+        """The last ``count`` entries, oldest first; bad lines are skipped.
+
+        ``since`` keeps entries whose ISO timestamp sorts at or after it.
+        """
         try:
             with open(self.path(), encoding="utf-8") as handle:
                 lines = handle.readlines()
         except OSError:
             return []
         entries = []
-        for line in lines[-(max(1, int(count))):]:
+        for line in lines:
             try:
                 row = json.loads(line)
             except ValueError:
                 continue
-            if isinstance(row, dict):
-                entries.append(row)
-        return entries
+            if not isinstance(row, dict):
+                continue
+            if since and str(row.get("ts", "")) < str(since):
+                continue
+            entries.append(row)
+        return entries[-max(1, int(count)):]
+
+    @staticmethod
+    def render(entries: list[dict]) -> list[str]:
+        """One human line per entry, for a terminal reading."""
+        rendered = []
+        for entry in entries:
+            status = "ok" if entry.get("ok") else "fail"
+            code = f" {entry.get('code')}" if entry.get("code") else ""
+            detail = f" {entry.get('detail')}" if entry.get("detail") else ""
+            rendered.append(f"{entry.get('ts', '')} "
+                            f"{entry.get('action', '')} {status}{code}{detail}")
+        return rendered
 
     @staticmethod
     def timestamp() -> str:
         import datetime
         return datetime.datetime.now().astimezone().isoformat(
-            timespec="seconds")
+            timespec="milliseconds")

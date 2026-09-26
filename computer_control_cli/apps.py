@@ -102,13 +102,15 @@ class Apps:
     def __init__(self, session: Session, desktop: Optional[Desktop] = None,
                  entry_dirs: Optional[list] = None,
                  path: Optional[str] = None,
-                 terminal_launcher: Optional[str] = None):
+                 terminal_launcher: Optional[str] = None,
+                 proc: str = "/proc"):
         self.session = session
         self.desktop = desktop or Desktop(session)
         self.entry_dirs = list(entry_dirs) if entry_dirs is not None \
             else list(DEFAULT_ENTRY_DIRS)
         self._path = path if path is not None else os.environ.get("PATH", "")
         self.terminal_launcher = terminal_launcher
+        self.proc = proc
 
     def detect_terminal(self) -> Optional[str]:
         """The terminal to run a ``Terminal=true`` program inside."""
@@ -138,7 +140,61 @@ class Apps:
         return list(seen.values())
 
     def list(self) -> list[dict]:
-        return [entry.to_dict() for entry in self.entries()]
+        """Desktop entries plus running processes without one."""
+        processes = self.processes()
+        rows = []
+        for entry in self.entries():
+            row = entry.to_dict()
+            argv = entry.argv()
+            keys = [entry.name.lower()]
+            if argv:
+                keys.append(os.path.basename(argv[0]).lower())
+            pid = next((processes[key] for key in keys if key in processes), 0)
+            row.update({"kind": "desktop", "running": bool(pid),
+                        "pid": pid or None})
+            rows.append(row)
+        known = {row["pid"] for row in rows if row.get("pid")}
+        for name, pid in sorted(processes.items(), key=lambda item: item[1]):
+            if pid in known:
+                continue
+            if any(row.get("command") and name in row["command"].lower()
+                   for row in rows):
+                continue
+            rows.append({"name": name, "id": None, "command": None,
+                         "terminal": False, "wm_class": None,
+                         "kind": "process", "running": True, "pid": pid})
+        return rows
+
+    def processes(self) -> dict[str, int]:
+        """Running process names to their lowest pid, from ``/proc``."""
+        found: dict[str, int] = {}
+        try:
+            entries = os.listdir(self.proc)
+        except OSError:
+            return found
+        for name in entries:
+            if not name.isdigit():
+                continue
+            directory = os.path.join(self.proc, name)
+            comm = self._read(os.path.join(directory, "comm")).strip()
+            pid = int(name)
+            candidates = {comm.lower()} if comm else set()
+            cmdline = self._read(os.path.join(directory, "cmdline"))
+            first = cmdline.split("\x00", 1)[0] if cmdline else ""
+            if first:
+                candidates.add(os.path.basename(first).lower())
+            for candidate in candidates:
+                if candidate and candidate not in found:
+                    found[candidate] = pid
+        return found
+
+    @staticmethod
+    def _read(path: str) -> str:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                return handle.read()
+        except OSError:
+            return ""
 
     def resolve(self, name: str) -> DesktopEntry:
         """Exact name/id, else a unique substring; nothing or several refuses."""
@@ -240,7 +296,7 @@ class Apps:
         return result
 
     def launch(self, argv: list[str], wait: bool = False,
-               timeout: float = 15.0) -> Outcome:
+               timeout: float = 15.0, workspace: int = 0) -> Outcome:
         """Start a program from an explicit argv, optionally waiting for it."""
         if not argv:
             raise ControlError("bad-args", "launch: a program is required")
@@ -252,8 +308,16 @@ class Apps:
             return Outcome.unverifiable("app", command=command_line)
         needle = os.path.basename(str(argv[0])).lower()
         window = self.wait_for_window(before, [needle], timeout, argv[0])
-        return Outcome.confirmed("app", window=window.brief(),
-                                 command=command_line)
+        placed = 0
+        if workspace and window.workspace != int(workspace):
+            self.desktop.move_window(f"address:{window.address}", workspace)
+            window = self.find_address(window.address) or window
+            placed = int(workspace)
+        result = Outcome.confirmed("app", window=window.brief(),
+                                   command=command_line)
+        if placed:
+            result.details["workspace"] = placed
+        return result
 
     @staticmethod
     def needles(entry: DesktopEntry, argv: list[str]) -> list[str]:

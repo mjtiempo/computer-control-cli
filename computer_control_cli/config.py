@@ -30,6 +30,10 @@ class Config:
             return override
         return os.path.join(self.state_dir(), "actions.jsonl")
 
+    def log_enabled(self) -> bool:
+        """``CCC_LOG=off`` turns the action log off entirely."""
+        return self._env.get("CCC_LOG", "").strip().lower() != "off"
+
     def log_text(self) -> str:
         """How typed text is recorded: ``off``, ``preview`` (default) or ``full``."""
         mode = self._env.get("CCC_LOG_TEXT", "").lower()

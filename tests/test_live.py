@@ -12,7 +12,9 @@ import tempfile
 import time
 import unittest
 
+from computer_control_cli.a11y import A11y  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.apps import Apps  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.audit import Audit  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.desktop import Desktop  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.input import Input  # pi-lens-ignore: reportMissingImports
@@ -37,6 +39,9 @@ class LiveDesktopTests(unittest.TestCase):
         cls.screen = Screen(cls.session)
         cls.system = SystemInfo(cls.session)
         cls.apps = Apps(cls.session, cls.desktop)
+        cls.a11y = A11y(cls.session, input=cls.input, desktop=cls.desktop)
+        cls.audit = Audit(cls.session, cls.desktop, cls.screen, cls.input,
+                          cls.a11y)
 
     # ------------------------------------------------------------- reads
     def test_state_reads_the_real_desktop(self):
@@ -69,6 +74,25 @@ class LiveDesktopTests(unittest.TestCase):
             self.assertTrue(os.path.isfile(saved["path"]))
             self.assertGreater(saved["width"], 0)
             self.assertGreater(saved["height"], 0)
+
+    def test_audit_passes_on_this_desktop(self):
+        result = self.audit.audit(no_a11y=True)
+
+        self.assertTrue(result["ok"], result["critical_failed"])
+        self.assertEqual(result["critical_failed"], [])
+
+    def test_a11y_enable_is_confirmed(self):
+        result = self.a11y.enable()
+
+        self.assertTrue(result.verified)
+
+    def test_a11y_index_is_a_list(self):
+        rows = self.a11y.index(max_items=5)
+
+        self.assertIsInstance(rows, list)
+        if not rows:
+            self.skipTest("no accessible elements exposed on this desktop")
+        self.assertTrue(all("role" in row for row in rows))
 
     def test_close_apps_dry_run_changes_nothing(self):
         before = len(self.desktop.windows())

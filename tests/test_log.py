@@ -89,6 +89,41 @@ class ActionLogTests(unittest.TestCase):
         with open(self.path) as handle:
             self.assertEqual(json.loads(handle.readline())["action"], "state")
 
+    def test_off_disables_the_log(self):
+        config = Config(env={"CCC_LOG": "off"})
+        log = ActionLog(config)
+
+        log.write("move", ok=True)
+
+        self.assertEqual(log.entries(), [])
+        self.assertFalse(os.path.exists(log.path()))
+
+    def test_since_filters_by_timestamp(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        with open(self.path, "w") as handle:
+            handle.write(json.dumps(
+                {"ts": "2026-01-01T00:00:00.000+00:00", "action": "one",
+                 "ok": True}) + "\n")
+            handle.write(json.dumps(
+                {"ts": "2026-01-01T00:00:01.000+00:00", "action": "two",
+                 "ok": True}) + "\n")
+        log = ActionLog(self.config)
+
+        actions = [entry["action"] for entry in
+                   log.entries(50, since="2026-01-01T00:00:01.000+00:00")]
+
+        self.assertEqual(actions, ["two"])
+
+    def test_render_is_one_line_per_entry(self):
+        lines = ActionLog.render([
+            {"ts": "2026-01-01T00:00:00", "action": "move", "ok": True},
+            {"ts": "2026-01-01T00:00:01", "action": "focus", "ok": False,
+             "code": "window-not-found"},
+        ])
+
+        self.assertEqual(lines[0], "2026-01-01T00:00:00 move ok")
+        self.assertIn("focus fail window-not-found", lines[1])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -183,6 +183,36 @@ class Pointer:
                                f"ydotool click failed: "
                                f"{(proc.stderr or '').strip()}")
 
+    BUTTON_EVDEV = {"0xC0": 272, "0xC1": 273, "0xC2": 274}
+
+    def press(self, code: str) -> None:
+        self._button_state(code, 1)
+
+    def release(self, code: str) -> None:
+        self._button_state(code, 0)
+
+    def _button_state(self, code: str, value: int) -> None:
+        """Hold or release a button through a one-shot evdev device.
+
+        ``ydotool click`` is a full press-and-release, so a drag needs the
+        two states separately; uinput is the only route that exposes them.
+        """
+        button = self.BUTTON_EVDEV.get(code)
+        if button is None:
+            raise ControlError("bad-args", f"bad button code {code!r}")
+        script = (
+            "from evdev import UInput, ecodes\n"
+            "from time import sleep\n"
+            f"ui = UInput({{1: [{button}]}}, name='ccc-button')\n"
+            f"ui.write(ecodes.EV_KEY, {button}, {value}); ui.syn()\n"
+            "sleep(0.02); ui.close()\n"
+        )
+        proc = self.session.run(["python3", "-c", script])
+        if proc.returncode != 0:
+            raise ControlError("ydotool",
+                               f"button state failed: "
+                               f"{(proc.stderr or '').strip()}")
+
     def wheel(self, direction: str, amount: int) -> None:
         click, axis = {"up": (1, 8), "down": (-1, 8),
                        "left": (-1, 6), "right": (1, 6)}[direction]
@@ -227,31 +257,63 @@ class Keyboard:
             raise ControlError("type",
                                f"wtype failed: {(proc.stderr or '').strip()}")
 
-    def type_text(self, text: str) -> None:
-        for argv in self.type_plan(text):
+    def type_text(self, text: str, delay_ms: int = 0) -> None:
+        for argv in self.type_plan(text, delay_ms):
             proc = self.session.run(argv)
             if proc.returncode != 0:
                 raise ControlError("type",
                                    f"wtype failed: "
                                    f"{(proc.stderr or '').strip()}")
 
+    def key_state(self, combo: Combo, down: bool) -> None:
+        """Press (``down``) or release one chord's keys, without a full chord.
+
+        A plain ctrl/alt/shift combo goes through wtype's own press/release
+        ops; a super chord (which wtype cannot hold) goes through ydotool's
+        key-state events.
+        """
+        holdable = not any(mod in ("super", "win", "mod")
+                           for mod in combo.mods)
+        keysym = KeyMap.wtype_name(combo.key) if holdable else None
+        if keysym:
+            flags = (["-M"] if down else ["-m"])
+            argv = ["wtype"]
+            for mod in combo.mods:
+                argv += flags + [mod]
+            argv += (["-P"] if down else ["-p"]) + [keysym]
+            proc = self.session.run(argv)
+            if proc.returncode != 0:
+                raise ControlError("type",
+                                   f"wtype failed: "
+                                   f"{(proc.stderr or '').strip()}")
+            return
+        sequence = [f"{code}:{1 if down else 0}"
+                    for code in KeyMap.codes(combo)]
+        proc = self.session.run(["ydotool", "key", *sequence])
+        if proc.returncode != 0:
+            raise ControlError("ydotool",
+                               f"ydotool key failed: "
+                               f"{(proc.stderr or '').strip()}")
+
     @staticmethod
-    def type_plan(text: str) -> list[list[str]]:
+    def type_plan(text: str, delay_ms: int = 0) -> list[list[str]]:
         """The wtype invocations that type ``text`` (newlines become Return).
 
         A line starting with ``-`` gets its own ``wtype --`` call, because
-        wtype parses it as an option otherwise.
+        wtype parses it as an option otherwise. ``delay_ms`` becomes wtype's
+        own per-keystroke delay.
         """
+        prefix = ["-d", str(int(delay_ms))] if delay_ms else []
         segments = text.split("\n")
         if any(segment.startswith("-") for segment in segments):
             plan: list[list[str]] = []
             for index, segment in enumerate(segments):
                 if index > 0:
-                    plan.append(["wtype", "-k", "Return"])
+                    plan.append(["wtype", *prefix, "-k", "Return"])
                 if segment:
-                    plan.append(["wtype", "--", segment])
+                    plan.append(["wtype", *prefix, "--", segment])
             return plan
-        argv = ["wtype"]
+        argv = ["wtype", *prefix]
         for index, segment in enumerate(segments):
             if index > 0:
                 argv += ["-k", "Return"]
@@ -385,11 +447,53 @@ class Input:
             route = "ydotool"
         return Outcome.unverifiable("input", combo=combo, route=route)
 
-    def type_text(self, text: str) -> Outcome:
+    def type_text(self, text: str, delay_ms: int = 0) -> Outcome:
         """Type text; both a literal ``\\n`` and a real newline mean Return."""
         replaced = str(text).replace("\\n", "\n")
-        self.keyboard.type_text(replaced)
-        return Outcome.unverifiable("input", chars=len(str(text)))
+        self.keyboard.type_text(replaced, delay_ms)
+        return Outcome.unverifiable("input", chars=len(str(text)),
+                                    delay_ms=delay_ms)
+
+    def key_down(self, combo: str) -> Outcome:
+        """Hold a chord's keys down (a drag for the keyboard)."""
+        self.keyboard.key_state(KeyMap.parse(combo), down=True)
+        return Outcome.unverifiable("input", combo=combo, state="down")
+
+    def key_up(self, combo: str) -> Outcome:
+        """Release a chord's keys."""
+        self.keyboard.key_state(KeyMap.parse(combo), down=False)
+        return Outcome.unverifiable("input", combo=combo, state="up")
+
+    def drag(self, x1: int, y1: int, x2: int, y2: int, button: str = "L",
+             duration_ms: int = 300, steps: int = 12) -> Outcome:
+        """Press at the start, move to the end, release — release ALWAYS.
+
+        The release is in a ``finally``: a failed movement must not leave the
+        user's mouse button held down.
+        """
+        upper = str(button).upper()
+        code = KeyMap.BUTTONS.get(upper)
+        if code is None:
+            raise ControlError("bad-args",
+                               f"drag: bad button {button!r} "
+                               "(expected L, R or M)")
+        start_x, start_y = int(x1), int(y1)
+        end_x, end_y = int(x2), int(y2)
+        steps = max(1, int(steps))
+        self.warp(start_x, start_y)
+        self.pointer.press(code)
+        try:
+            for index in range(1, steps + 1):
+                fraction = index / steps
+                self.pointer.move_logical(
+                    int(round(start_x + (end_x - start_x) * fraction)),
+                    int(round(start_y + (end_y - start_y) * fraction)))
+                if duration_ms:
+                    time.sleep(max(0.0, float(duration_ms)) / 1000.0 / steps)
+        finally:
+            self.pointer.release(code)
+        return Outcome.unverifiable("px", button=upper, x1=start_x, y1=start_y,
+                                    x2=end_x, y2=end_y)
 
     # ------------------------------------------------------------ internals
     @staticmethod

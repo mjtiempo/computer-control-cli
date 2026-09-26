@@ -16,6 +16,7 @@ from typing import Optional
 
 from computer_control_cli.coerce import Coerce  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.models import Window  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.session import Session  # pi-lens-ignore: reportMissingImports
 
 DEFAULT_KEEP = 20
@@ -62,6 +63,31 @@ class Screen:
                 "window-not-found",
                 "active-screen: the focused window reports no size")
         return self.region(x, y, w, h, no_cursor)
+
+    def capture_window(self, window: Window,
+                       no_cursor: bool = False) -> bytes:
+        """The rect of one named window, resolved by the caller."""
+        return self.region(window.x, window.y, window.w, window.h, no_cursor)
+
+    def monitor(self, name: str, no_cursor: bool = False) -> bytes:
+        """One monitor's whole logical rect, by name (exact, else unique)."""
+        needle = str(name).strip().lower()
+        monitors = self.session.monitors()
+        exact = [m for m in monitors if m.name.lower() == needle]
+        matches = exact or [m for m in monitors if needle in m.name.lower()]
+        if not matches:
+            names = ", ".join(m.name for m in monitors) or "none readable"
+            raise ControlError(
+                "monitor-not-found",
+                f"screen: no monitor named {name!r} (have: {names})")
+        if len(matches) > 1:
+            names = ", ".join(m.name for m in matches)
+            raise ControlError(
+                "ambiguous-monitor",
+                f"screen: {len(matches)} monitors match {name!r} ({names})")
+        monitor = matches[0]
+        return self.region(monitor.x, monitor.y, monitor.w, monitor.h,
+                           no_cursor)
 
     def save(self, data: bytes, out_dir: str, prefix: str = "screen",
              keep: int = DEFAULT_KEEP) -> dict:

@@ -41,7 +41,7 @@ class FakeRunner:
             raise FileNotFoundError(argv[0])
         if key in self.timeouts:
             raise subprocess.TimeoutExpired(argv, timeout)
-        if key == "wl-paste --no-newline":
+        if key in ("wl-paste --no-newline", "wl-paste --primary --no-newline"):
             stdout = (self.responses[key] if key in self.responses
                       else self.clipboard)
             return subprocess.CompletedProcess(
@@ -197,6 +197,9 @@ class FakeInputRunner:
         self.calls: list[list[str]] = []
         self.stubborn = False
         self.responses: dict[str, object] = {}
+        self.returncodes: dict[str, int] = {}
+        self.stderrs: dict[str, str] = {}
+        self.environments: list[dict] = []
         self.inputs: list[Optional[str]] = []
         self.spawned: list[tuple[list[str], Optional[str]]] = []
         self.clipboard = ""
@@ -216,13 +219,19 @@ class FakeInputRunner:
     def run(self, argv, env=None, timeout: float = 15, binary: bool = False,
             input=None):
         self.calls.append(list(argv))
+        self.environments.append(dict(env or {}))
         self.inputs.append(input)
         key = " ".join(argv)
+        if key in self.returncodes:
+            return subprocess.CompletedProcess(
+                argv, self.returncodes[key],
+                stdout=str(self.responses.get(key, "")),
+                stderr=self.stderrs.get(key, ""))
         if key in self.responses:
             return subprocess.CompletedProcess(argv, 0,
                                                stdout=self.responses[key],
                                                stderr="")
-        if key == "wl-paste --no-newline":
+        if key in ("wl-paste --no-newline", "wl-paste --primary --no-newline"):
             return subprocess.CompletedProcess(argv, 0,
                                                stdout=self.clipboard,
                                                stderr="")

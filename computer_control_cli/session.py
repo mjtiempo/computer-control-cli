@@ -189,6 +189,17 @@ class Session:
         return runtime
 
     # ------------------------------------------------------------- resolve
+    def with_env(self, updates: Mapping[str, str]) -> "Session":
+        """A session like this one with environment overrides.
+
+        The same runner and discoverer are kept, so a caller can target an
+        instance or display without losing the process boundary it injected.
+        """
+        base = dict(self.resolved_env() or {})
+        base.update(updates)
+        return Session(env=base, runner=self._runner,
+                       discoverer=self._discoverer)
+
     def resolved_env(self) -> Optional[dict]:
         if self._env is None:
             self._env = self._discoverer.discover()

@@ -7,6 +7,7 @@ import time
 import unittest
 
 from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.models import Window  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.screen import Screen  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.session import Session  # pi-lens-ignore: reportMissingImports
 
@@ -118,6 +119,47 @@ class ScreenSaveTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "capture")
 
 
+class ScreenWindowAndMonitorTests(unittest.TestCase):
+    def test_capture_window_uses_its_rect(self):
+        window = Window.from_hypr(ACTIVE)
+        assert window is not None
+        screen, runner = make_screen(
+            responses={"grim -c -s 1 -g 100,200 800x600 -": png(800, 600)})
+
+        self.assertEqual(screen.capture_window(window), png(800, 600))
+        self.assertEqual(runner.calls[-1],
+                         ["grim", "-c", "-s", "1", "-g",
+                          "100,200 800x600", "-"])
+
+    def test_monitor_by_exact_name(self):
+        hypr = FakeHyprland()
+        screen, runner = make_screen_for(
+            hypr, {"grim -c -s 1 -g 0,0 1920x1080 -": png(1920, 1080)})
+
+        self.assertEqual(screen.monitor("eDP-1"), png(1920, 1080))
+
+    def test_monitor_unknown_refuses(self):
+        screen, _ = make_screen_for(FakeHyprland(), {})
+
+        with self.assertRaises(ControlError) as caught:
+            screen.monitor("NOPE-1")
+
+        self.assertEqual(caught.exception.code, "monitor-not-found")
+
+    def test_monitor_ambiguous_refuses(self):
+        hypr = FakeHyprland(monitors=[
+            {"name": "DP-1", "x": 0, "y": 0, "width": 1920, "height": 1080,
+             "scale": 1.0, "focused": True},
+            {"name": "DP-2", "x": 1920, "y": 0, "width": 1920, "height": 1080,
+             "scale": 1.0, "focused": False}])
+        screen, _ = make_screen_for(hypr, {})
+
+        with self.assertRaises(ControlError) as caught:
+            screen.monitor("DP-")
+
+        self.assertEqual(caught.exception.code, "ambiguous-monitor")
+
+
 class _TwoCommandRunner:
     """Routes hyprctl to one double and everything else to another."""
 
@@ -141,6 +183,13 @@ def make_active_screen(hyprland, responses):
     runner = _TwoCommandRunner(hyprland, FakeRunner(responses=responses))
     session = Session(env=ENV, runner=runner, discoverer=FakeDiscoverer(ENV))
     return Screen(session)
+
+
+def make_screen_for(hyprland, responses):
+    """(Screen, runner) for a session whose hyprctl goes to ``hyprland``."""
+    runner = _TwoCommandRunner(hyprland, FakeRunner(responses=responses))
+    session = Session(env=ENV, runner=runner, discoverer=FakeDiscoverer(ENV))
+    return Screen(session), runner
 
 
 if __name__ == "__main__":

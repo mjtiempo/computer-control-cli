@@ -23,6 +23,17 @@ class ControlErrorTests(unittest.TestCase):
         self.assertEqual(ControlError().code, "error")
         self.assertEqual(ControlError().message, "")
 
+    def test_from_line_reads_a_refusal(self):
+        error = ControlError.from_line("ERR[stale-tree]: the element is gone")
+
+        assert error is not None
+        self.assertEqual(error.code, "stale-tree")
+        self.assertEqual(error.message, "the element is gone")
+
+    def test_from_line_ignores_prose(self):
+        self.assertIsNone(ControlError.from_line("just a message"))
+        self.assertIsNone(ControlError.from_line(""))
+
 
 if __name__ == "__main__":
     unittest.main()

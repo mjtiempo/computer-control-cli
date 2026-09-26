@@ -296,21 +296,48 @@ class Desktop:
                                  closed=closed, remaining=[], rounds=spent)
 
     def wait(self, spec: str = "", gone: bool = False, timeout: float = 15.0,
-             poll: float = 0.05) -> Outcome:
-        """Block until a matching window appears (or, with ``gone``, is gone)."""
+             poll: float = 0.05, new_only: bool = False,
+             exclude: Optional[set] = None, title: str = "",
+             klass: str = "", stable: int = 1) -> Outcome:
+        """Block until a matching window appears (or, with ``gone``, is gone).
+
+        ``new_only`` snapshots the open addresses first, so "a new window" is
+        one that did not exist when the wait began; ``exclude`` drops
+        addresses a caller already accounted for. ``title``/``klass`` narrow
+        the matches, and ``stable`` requires that many consecutive satisfied
+        reads so a window caught mid-open is not reported as ready.
+        """
+        ignored = {str(address).lower() for address in (exclude or set())}
+        baseline = self._open_addresses() if new_only else None
+        needle_title = str(title).lower()
+        needle_class = str(klass).lower()
+        wanted = max(1, int(stable))
+        streak = 0
         deadline = time.time() + max(0.0, float(timeout))
         while True:
-            found = self.matching(spec) if spec else self.windows()
-            satisfied = not found if gone else bool(found)
-            if satisfied:
+            rows = self.matching(spec) if spec else self.windows()
+            if baseline is not None:
+                rows = [w for w in rows if w.address.lower() not in baseline]
+            if ignored:
+                rows = [w for w in rows if w.address.lower() not in ignored]
+            if needle_title:
+                rows = [w for w in rows if needle_title in w.title.lower()]
+            if needle_class:
+                rows = [w for w in rows if needle_class in w.cls.lower()]
+            satisfied = not rows if gone else bool(rows)
+            streak = streak + 1 if satisfied else 0
+            if streak >= wanted:
                 if gone:
-                    return Outcome.confirmed("poll", gone=True)
-                return Outcome.confirmed("poll", window=found[0].brief())
+                    return Outcome.confirmed("poll", gone=True, stable=streak)
+                return Outcome.confirmed("poll", window=rows[0].brief(),
+                                         stable=streak)
             if time.time() >= deadline:
+                wanted_effect = ("is still open" if gone
+                                 else ("did not appear" if not new_only
+                                       else "did not appear (no new window)"))
                 raise ControlError(
                     "wait-timeout",
-                    f"wait-window: {spec!r} "
-                    f"{'is still open' if gone else 'did not appear'} "
+                    f"wait-window: {spec or 'a window'!r} {wanted_effect} "
                     f"within {timeout:g}s")
             time.sleep(min(poll, max(0.0, deadline - time.time())))
 

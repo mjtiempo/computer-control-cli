@@ -265,5 +265,110 @@ class KeyboardTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "type")
 
 
+class KeyboardHoldTests(unittest.TestCase):
+    def test_key_down_uses_wtype_for_plain_keys(self):
+        keyboard_input, runner = make_input()
+
+        result = keyboard_input.key_down("ctrl+c")
+
+        self.assertEqual(result.details["state"], "down")
+        self.assertIn(["wtype", "-M", "ctrl", "-P", "c"], runner.calls)
+
+    def test_key_up_uses_wtype_for_plain_keys(self):
+        keyboard_input, runner = make_input()
+
+        keyboard_input.key_up("ctrl+c")
+
+        self.assertIn(["wtype", "-m", "ctrl", "-p", "c"], runner.calls)
+
+    def test_key_down_super_uses_ydotool(self):
+        keyboard_input, runner = make_input()
+
+        keyboard_input.key_down("super+return")
+
+        self.assertIn(["ydotool", "key", "125:1", "28:1"], runner.calls)
+
+    def test_type_with_delay(self):
+        keyboard_input, runner = make_input()
+
+        keyboard_input.type_text("hi", delay_ms=100)
+
+        self.assertIn(["wtype", "-d", "100", "hi"], runner.calls)
+
+    def test_type_reports_the_delay(self):
+        keyboard_input, _ = make_input()
+
+        result = keyboard_input.type_text("hi", delay_ms=25)
+
+        self.assertEqual(result.details["delay_ms"], 25)
+
+    def test_key_up_super_uses_ydotool(self):
+        keyboard_input, runner = make_input()
+
+        keyboard_input.key_up("super+return")
+
+        self.assertIn(["ydotool", "key", "125:0", "28:0"], runner.calls)
+
+
+class BreakingRunner(FakeInputRunner):
+    """Fails on the second relative move, i.e. after a drag has pressed."""
+
+    def __init__(self):
+        super().__init__()
+        self.moves = 0
+
+    def run(self, argv, env=None, timeout=15, binary=False, input=None):
+        if argv[:2] == ["ydotool", "mousemove"]:
+            self.moves += 1
+            if self.moves > 1:
+                raise ControlError("ydotool", "broken")
+        return super().run(argv, env=env, timeout=timeout, binary=binary,
+                           input=input)
+
+
+class DragTests(unittest.TestCase):
+    def test_drag_presses_moves_and_releases(self):
+        pointer_input, runner = make_input()
+
+        result = pointer_input.drag(100, 100, 300, 200, duration_ms=0)
+
+        self.assertFalse(result.verified)
+        scripts = [call[-1] for call in runner.calls if call[0] == "python3"]
+        self.assertTrue(any("EV_KEY" in script and ", 1)" in script
+                            for script in scripts))
+        self.assertTrue(any("EV_KEY" in script and ", 0)" in script
+                            for script in scripts))
+        self.assertEqual(runner.cursorpos(), "300,200")
+
+    def test_drag_right_button(self):
+        pointer_input, runner = make_input()
+
+        pointer_input.drag(10, 10, 20, 20, button="R", duration_ms=0)
+
+        scripts = [call[-1] for call in runner.calls if call[0] == "python3"]
+        self.assertTrue(any("273, 1)" in script for script in scripts))
+
+    def test_drag_bad_button_refuses(self):
+        pointer_input, _ = make_input()
+
+        with self.assertRaises(ControlError) as caught:
+            pointer_input.drag(1, 1, 2, 2, button="Z")
+
+        self.assertEqual(caught.exception.code, "bad-args")
+
+    def test_release_happens_when_movement_fails(self):
+        breaking = BreakingRunner()
+        session = Session(env=ENV, runner=breaking,
+                          discoverer=FakeDiscoverer(ENV))
+
+        with self.assertRaises(ControlError):
+            Input(session).drag(100, 100, 300, 200, duration_ms=0)
+
+        scripts = [call[-1] for call in breaking.calls if call[0] == "python3"]
+        self.assertTrue(any("EV_KEY" in script and ", 0)" in script
+                            for script in scripts),
+                        "the button must be released even when the move fails")
+
+
 if __name__ == "__main__":
     unittest.main()

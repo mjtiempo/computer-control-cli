@@ -9,6 +9,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
+from computer_control_cli.a11y import A11y  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.cli import Cli  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.config import Config  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.session import Session  # pi-lens-ignore: reportMissingImports
@@ -120,6 +121,20 @@ class CliActionTests(CliFixture):
         self.assertEqual(code, 1)
         self.assertIn("ERR[wait-timeout]", stderr)
 
+    def test_wait_window_filters(self):
+        result = self.run_json("wait-window", "--title", "foot",
+                               "--timeout", "0")
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["window"]["address"], "0xaaa1")
+
+    def test_wait_window_new_finds_nothing(self):
+        code, _, stderr = self.run_cli("wait-window", "--new",
+                                       "--timeout", "0")
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[wait-timeout]", stderr)
+
 
 class BinaryStdout:
     """A stdout double that carries a .buffer for PNG bytes."""
@@ -136,6 +151,22 @@ class BinaryStdout:
 
 
 class CliScreenTests(CliFixture):
+    def test_screen_monitor_captures_its_rect(self):
+        self.runner.responses["grim -c -s 1 -g 0,0 1920x1080 -"] = png(1920, 1080)
+
+        result = self.run_json("screen", "--monitor", "eDP-1",
+                               "--out", self._tmp.name)
+
+        self.assertEqual((result["width"], result["height"]), (1920, 1080))
+
+    def test_active_screen_by_window_spec(self):
+        self.runner.responses["grim -c -s 1 -g 100,200 800x600 -"] = png(800, 600)
+
+        result = self.run_json("active-screen", "--window", "class:foot",
+                               "--out", self._tmp.name)
+
+        self.assertEqual((result["width"], result["height"]), (800, 600))
+
     def test_screen_bytes(self):
         self.runner.responses["grim -c -s 1 -"] = png(1920, 1080)
         stdout = BinaryStdout()
@@ -177,10 +208,83 @@ class CliInputTests(CliFixture):
 
         self.assertEqual(result["chars"], 5)
 
+    def test_type_with_delay(self):
+        self.run_json("type", "hi", "--delay", "100")
+
+        self.assertIn(["wtype", "-d", "100", "hi"], self.runner.calls)
+
+    def test_key_down_and_up(self):
+        self.run_json("key-down", "ctrl+c")
+        self.run_json("key-up", "ctrl+c")
+
+        self.assertIn(["wtype", "-M", "ctrl", "-P", "c"], self.runner.calls)
+        self.assertIn(["wtype", "-m", "ctrl", "-p", "c"], self.runner.calls)
+
+    def test_drag(self):
+        result = self.run_json("drag", "100", "100", "300", "200",
+                               "--duration", "0")
+
+        self.assertFalse(result["verified"])
+        self.assertTrue(any(call[0] == "python3" and "EV_KEY" in call[-1]
+                            for call in self.runner.calls))
+
+    def test_launch_with_workspace(self):
+        self.hypr.spawn_on_exec = [{"address": "0xfeed", "title": "prog",
+                                    "class": "prog",
+                                    "workspace": {"id": 1, "name": "1"},
+                                    "at": [0, 0], "size": [100, 100],
+                                    "mapped": True, "fullscreen": 0,
+                                    "floating": False, "pid": 77}]
+
+        result = self.run_json("launch", "--workspace", "2", "prog")
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["workspace"], 2)
+
     def test_clipboard_set_and_get(self):
         self.run_json("clipboard", "set", "hello")
         self.assertEqual(self.runner.spawned[-1], (["wl-copy"], "hello"))
-        self.assertEqual(self.run_json("clipboard", "get"), {"text": "hello"})
+        got = self.run_json("clipboard", "get")
+        self.assertEqual(got["text"], "hello")
+        self.assertFalse(got["primary"])
+
+    def test_clipboard_primary_and_clear(self):
+        self.run_json("clipboard", "set", "first", "--primary")
+        self.assertEqual(self.runner.spawned[-1][0],
+                         ["wl-copy", "--primary"])
+        cleared = self.run_json("clipboard", "clear", "--primary")
+        self.assertTrue(cleared["cleared"])
+        self.assertEqual(self.runner.calls[-1],
+                         ["wl-copy", "--primary", "--clear"])
+
+    def test_clipboard_get_primary(self):
+        self.runner.clipboard = "primary text"
+
+        result = self.run_json("clipboard", "get", "--primary")
+
+        self.assertTrue(result["primary"])
+        self.assertEqual(result["text"], "primary text")
+
+    def test_click_el_px_fallback(self):
+        self.runner.responses[f"python3 {A11y.bridge_path()} click 0"] = \
+            json.dumps({"ok": True, "route": "px-fallback", "x": 10,
+                        "y": 20, "app": "foot", "role": "push button",
+                        "name": "Save"})
+
+        result = self.run_json("click", "--el", "0")
+
+        self.assertEqual(result["route"], "px-fallback")
+        self.assertEqual(result["x"], 110)   # + focused window origin
+        self.assertEqual(result["y"], 220)
+        self.assertIn(["ydotool", "click", "0xC0"], self.runner.calls)
+
+    def test_log_text_lines(self):
+        self.run_json("type", "hi")
+        code, stdout, _ = self.run_cli("log", "1", "--text")
+
+        self.assertEqual(code, 0)
+        self.assertIn("type ok", stdout)
+        self.assertNotIn("hi", stdout)
 
     def test_type_is_redacted_in_the_log(self):
         self.run_json("type", "hunter2")
@@ -189,6 +293,111 @@ class CliInputTests(CliFixture):
         entry = json.loads(stdout)[0]
         self.assertNotIn("text", entry)
         self.assertEqual(entry["text_chars"], 7)
+
+
+class CliA11yTests(CliFixture):
+    def test_a11y_prints_rows(self):
+        self.runner.responses[f"python3 {A11y.bridge_path()} index"] = \
+            json.dumps([{"index": 0, "app": "foot", "role": "push button",
+                         "name": "Save", "actions": ["press"]}])
+
+        rows = self.run_json("a11y")
+
+        self.assertEqual(rows[0]["name"], "Save")
+
+    def test_click_el_ax_route(self):
+        self.runner.responses[f"python3 {A11y.bridge_path()} click 0"] = \
+            json.dumps({"ok": True, "route": "ax", "action": "press",
+                        "role": "push button", "name": "Save"})
+
+        result = self.run_json("click", "--el", "0")
+
+        self.assertEqual(result["route"], "ax")
+        self.assertEqual(result["action"], "press")
+
+    def test_click_el_with_coordinates_refuses(self):
+        code, _, stderr = self.run_cli("click", "1", "2", "--el", "3")
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[bad-args]", stderr)
+
+    def test_a11y_enable(self):
+        set_key = ("busctl --user set-property org.a11y.Bus /org/a11y/bus "
+                   "org.a11y.Status IsEnabled b true")
+        get_key = ("busctl --user get-property org.a11y.Bus /org/a11y/bus "
+                   "org.a11y.Status IsEnabled")
+        self.runner.responses[set_key] = ""
+        self.runner.responses[get_key] = "b true"
+
+        result = self.run_json("a11y-enable")
+
+        self.assertTrue(result["verified"])
+
+
+class CliAuditTests(CliFixture):
+    def test_audit_reports_capabilities(self):
+        self.runner.responses["grim -s 1 -"] = png(1920, 1080)
+
+        result = self.run_json("audit", "--no-probe", "--no-a11y")
+
+        self.assertTrue(result["ok"])
+        self.assertIn("tools", result["capabilities"])
+        self.assertEqual(result["capabilities"]["logical_screen"],
+                         [1920, 1080])
+
+
+class CliGlobalTests(CliFixture):
+    def test_version(self):
+        code, stdout, _ = self.run_cli("--version")
+
+        self.assertEqual(code, 0)
+        self.assertIn("computer-control", stdout)
+
+    def test_instance_override_reaches_the_runner(self):
+        self.run_json("--instance", "sig_xyz", "pos")
+
+        self.assertEqual(
+            self.runner.environments[-1]["HYPRLAND_INSTANCE_SIGNATURE"],
+            "sig_xyz")
+
+    def test_display_override_reaches_the_runner(self):
+        self.run_json("--display", "wayland-9", "pos")
+
+        self.assertEqual(self.runner.environments[-1]["WAYLAND_DISPLAY"],
+                         "wayland-9")
+
+
+class CliSequenceTests(CliFixture):
+    def test_sequence_runs_steps(self):
+        steps = json.dumps([["pos"], ["move", "100", "100"]])
+
+        results = self.run_json("sequence", steps)
+
+        self.assertEqual(len(results), 2)
+        self.assertTrue(results[1]["verified"])
+        self.assertEqual(self.runner.cursorpos(), "100,100")
+
+    def test_sequence_stops_on_a_refusal(self):
+        steps = json.dumps([["focus", "class:missing"], ["move", "1", "1"]])
+
+        code, _, stderr = self.run_cli("sequence", steps)
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[window-not-found]", stderr)
+        self.assertFalse(any(call[:2] == ["ydotool", "mousemove"]
+                             for call in self.runner.calls))
+
+    def test_sequence_bad_json_refuses(self):
+        code, _, stderr = self.run_cli("sequence", "nope")
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[bad-json]", stderr)
+
+    def test_sequence_bad_step_refuses(self):
+        code, _, stderr = self.run_cli("sequence", json.dumps([["move"]]))
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[bad-args]", stderr)
 
 
 class CliRefusalTests(CliFixture):

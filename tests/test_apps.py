@@ -50,6 +50,8 @@ class AppsFixture(unittest.TestCase):
         self.write_entry("hidden.desktop", HIDDEN_ENTRY)
         self.bin_dir = os.path.join(self.dir, "bin")
         os.makedirs(self.bin_dir)
+        self.proc_dir = os.path.join(self.dir, "proc")
+        os.makedirs(self.proc_dir)
         self.hypr = FakeHyprland()
         self.session = Session(env=ENV, runner=self.hypr,
                                discoverer=FakeDiscoverer(ENV))
@@ -71,6 +73,15 @@ class AppsFixture(unittest.TestCase):
             handle.write("#!/bin/sh\n")
         os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR)
         return path
+
+    def create_proc(self, pid, comm, argv):
+        directory = os.path.join(self.proc_dir, str(pid))
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "comm"), "w") as handle:
+            handle.write(comm + "\n")
+        with open(os.path.join(directory, "cmdline"), "wb") as handle:
+            handle.write(b"\x00".join(a.encode() for a in argv) + b"\x00")
+        return directory
 
 
 class DesktopEntryTests(unittest.TestCase):
@@ -109,6 +120,29 @@ class AppsListTests(AppsFixture):
         self.assertEqual(rows[0]["name"], "Foot")
         self.assertIn("command", rows[0])
         self.assertIn("terminal", rows[0])
+
+    def test_list_marks_a_running_entry(self):
+        self.create_proc(321, "foot", ["/usr/bin/foot", "--server"])
+        apps = self.apps_with_proc()
+
+        row = next(r for r in apps.list() if r["name"] == "Foot")
+
+        self.assertTrue(row["running"])
+        self.assertEqual(row["pid"], 321)
+
+    def test_list_includes_processes_without_an_entry(self):
+        self.create_proc(654, "mystery", ["/usr/bin/mystery", "--flag"])
+        apps = self.apps_with_proc()
+
+        rows = [r for r in apps.list() if r.get("kind") == "process"]
+
+        self.assertTrue(any(r["name"] == "mystery" and r["pid"] == 654
+                            for r in rows))
+
+    def apps_with_proc(self):
+        return Apps(self.session, desktop=self.desktop,
+                    entry_dirs=[self.entries_dir], path=self.bin_dir,
+                    terminal_launcher="foot", proc=self.proc_dir)
 
 
 class AppsResolveTests(AppsFixture):
@@ -180,6 +214,17 @@ class AppsOpenTests(AppsFixture):
             self.apps.open("Foot", cwd=os.path.join(self.dir, "nope"))
 
         self.assertEqual(caught.exception.code, "cwd-missing")
+
+    def test_launch_places_the_window_on_a_workspace(self):
+        self.hypr.spawn_on_exec = [dict(FOOT_CLIENT)]
+
+        result = self.apps.launch(["foot", "--server"], wait=True, timeout=1,
+                                  workspace=2)
+
+        self.assertTrue(result.verified)
+        moved = next(c for c in self.hypr.clients
+                     if c["address"] == "0xfeed")
+        self.assertEqual(moved["workspace"]["id"], 2)
 
     def test_a_terminal_entry_runs_inside_a_terminal(self):
         self.write_entry("htop.desktop",

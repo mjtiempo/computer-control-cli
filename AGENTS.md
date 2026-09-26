@@ -3,18 +3,20 @@
 ## What this is
 
 A CLI that drives a Hyprland desktop: reads and info first, then workspace and
-window actions, apps, pointer input, keyboard input. The user-facing contract
-is the verb table in `README.md` plus the `ERR[code]` / `Outcome` contracts.
+window actions, apps, pointer input, keyboard input, AT-SPI element control,
+and a machine audit. The user-facing contract is the verb table in
+`README.md` plus the `ERR[code]` / `Outcome` contracts.
 
 ## Order of work (do not reorder)
 
 1. reads and info (`state`, `windows`, `workspaces`, `monitors`, `screen`,
-   `system`, `pos`)
+   `system`, `pos`, `log`)
 2. workspace and window actions (`switch`, `focus`, `close`, `close-apps`,
    `move-window`, `wait-window`)
 3. apps (`apps`, `which`, `dir`, `app-open`, `launch`)
-4. pointer (`move`, `click`, `scroll`)
-5. keyboard (`key`, `type`)
+4. pointer (`move`, `click`, `scroll`, `drag`)
+5. keyboard (`key`, `key-down`, `key-up`, `type`)
+6. AT-SPI (`a11y`, `a11y-enable`, `click --el`) and `audit`
 
 ## Test-driven development
 
@@ -24,20 +26,28 @@ is the verb table in `README.md` plus the `ERR[code]` / `Outcome` contracts.
   doubles live in `tests/fakes.py` (`FakeRunner`, `FakeHyprland`,
   `FakeInputRunner`, `FakeDiscoverer`). Never mock at a lower seam than
   `Runner` — the cursor model in `FakeInputRunner` is what makes warp
-  verification testable.
+  verification, drag, and the audit's calibration check testable.
 * The live battery is opt-in: `CCC_LIVE=1 python3 -m unittest tests.test_live`.
-  It is allowed to move the pointer, open a scratch window and use the
-  clipboard, and it must restore/clean up in `finally`.
+  It may move the pointer, open a scratch window and use the clipboard, and it
+  must restore/clean up in `finally`.
+* `tests/test_skill.py` is a drift gate: every CLI verb and every refusal code
+  the package can raise must appear in `skill/computer-control/SKILL.md`.
+  A new verb or code without a skill line fails the suite.
 
 ## Object-oriented rules
 
 * No module-level functions. A behavior belongs to the class that owns it:
   parsing to the model (`WindowSpec.parse`), coercion to `Coerce`, quoting to
-  `Session.lua_string`, argv to `ParserBuilder`.
-* Services are constructed once in `Cli` and injected for tests; nothing reads
-  `os.environ` outside `Config` / `SessionDiscoverer`.
+  `Session.lua_string`, argv to `ParserBuilder`, checks to `Audit`.
+* The one exception is `atspi_bridge.py`: it IS a program (run as
+  `python3 atspi_bridge.py index|click`), so it ends in the
+  `if __name__ == "__main__"` guard, like `__main__.py`. It must import
+  PyGObject lazily so the module itself stays importable for tests.
+* Services are constructed once in `Cli.build_services` and injected for
+  tests; nothing reads `os.environ` outside `Config` / `SessionDiscoverer`.
 * Prefer a small class to a bag of related free functions (`KeyMap` holds the
-  key tables; `Pointer` and `Keyboard` hold the device calls).
+  key tables; `Pointer` and `Keyboard` hold the device calls; `CheckLog`
+  holds the audit rows).
 * A one-off function is allowed only when it belongs to no class and is used
   once — there are none today, keep it that way.
 
@@ -47,12 +57,13 @@ is the verb table in `README.md` plus the `ERR[code]` / `Outcome` contracts.
 python3 -m unittest          # hermetic, all green
 pyright                      # 0 errors (pyrightconfig.json, repo venv)
 CCC_LIVE=1 python3 -m unittest tests.test_live -v
+./install.sh --check         # the installed link is this repo
 ```
 
-`python -m py_compile` and `python3 -m unittest` are the real import gates. The
-pi-lens fallback index cannot resolve this package from a lone file, so
-intra-package imports carry `# pi-lens-ignore: reportMissingImports`; that
-comment is inert for pyright and exists only to keep the editor quiet.
+`python3 -m unittest` and `pyright` are the real import gates. The pi-lens
+fallback index cannot resolve this package from a lone file, so intra-package
+imports carry `# pi-lens-ignore: reportMissingImports`; that comment is inert
+for pyright and exists only to keep the editor quiet.
 
 ## Conventions
 
@@ -61,6 +72,10 @@ comment is inert for pyright and exists only to keep the editor quiet.
   `*-not-verified` otherwise.
 * Ambiguity refuses; name the candidates.
 * A failure a caller can produce is a `ControlError` with an actionable code,
-  never a traceback.
+  never a traceback. A child program's `ERR[code]` line is re-raised verbatim
+  (`ControlError.from_line`), so the caller branches on the same code.
 * `ActionLog` redacts typed text and clipboard content (length + preview) and
   never fails the action it describes.
+* AT-SPI coverage is uneven (Chromium needs `--force-renderer-accessibility`;
+  terminals often expose nothing). An empty `a11y` list is a true answer, not
+  a bug; a live test that depends on rows SKIPs with that reason.
