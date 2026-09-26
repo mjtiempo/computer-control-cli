@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "computer-control-cli"
+version = "0.1.0"
+description = "Drive a Hyprland desktop from the CLI: reads, workspaces, apps, pointer and keyboard"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[project.scripts]
+computer-control = "computer_control_cli.cli:Cli.main"
+
+[tool.setuptools.packages.find]
+include = ["computer_control_cli*"]

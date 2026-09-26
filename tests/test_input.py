@@ -1,0 +1,269 @@
+"""Tests for the pointer and the keyboard.
+
+The pointer's one provable effect is the warp, so ``move`` must read the
+cursor back and refuse a mapping that lands somewhere else. Keyboard and
+button events are honestly ``unverifiable``; the tests pin which device each
+form takes and what it sends.
+"""
+
+import unittest
+
+from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.input import Input, KeyMap  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.session import Session  # pi-lens-ignore: reportMissingImports
+
+from tests.fakes import FakeDiscoverer, FakeHyprland, FakeInputRunner  # pi-lens-ignore: reportMissingImports
+
+ENV = {"HYPRLAND_INSTANCE_SIGNATURE": "sig_1", "WAYLAND_DISPLAY": "wayland-1"}
+
+DUAL_MONITORS = [
+    {"name": "eDP-1", "x": 0, "y": 0, "width": 1920, "height": 1080,
+     "scale": 1.0, "focused": True},
+    {"name": "HDMI-A-1", "x": 1920, "y": 0, "width": 2560, "height": 1440,
+     "scale": 1.0, "focused": False},
+]
+
+
+def make_input(hyprland=None):
+    runner = FakeInputRunner(hyprland or FakeHyprland())
+    session = Session(env=ENV, runner=runner, discoverer=FakeDiscoverer(ENV))
+    return Input(session), runner
+
+
+class KeyMapTests(unittest.TestCase):
+    def test_letters_use_evdev_codes(self):
+        self.assertEqual(KeyMap.evdev_code("a"), 30)
+        self.assertEqual(KeyMap.evdev_code("c"), 46)
+
+    def test_named_keys(self):
+        self.assertEqual(KeyMap.evdev_code("return"), 28)
+        self.assertEqual(KeyMap.evdev_code("f5"), 63)
+        self.assertEqual(KeyMap.evdev_code("pageup"), 104)
+
+    def test_digits(self):
+        self.assertEqual(KeyMap.evdev_code("1"), 2)
+        self.assertEqual(KeyMap.evdev_code("0"), 11)
+
+    def test_unknown_key_refuses(self):
+        with self.assertRaises(ControlError) as caught:
+            KeyMap.evdev_code("banana")
+
+        self.assertEqual(caught.exception.code, "key-unknown")
+
+    def test_parse_combo(self):
+        combo = KeyMap.parse("ctrl+shift+c")
+
+        self.assertEqual(combo.mods, ("ctrl", "shift"))
+        self.assertEqual(combo.key, "c")
+
+    def test_parse_empty_combo_refuses(self):
+        with self.assertRaises(ControlError) as caught:
+            KeyMap.parse("")
+
+        self.assertEqual(caught.exception.code, "bad-combo")
+
+    def test_parse_two_keys_refuses(self):
+        with self.assertRaises(ControlError) as caught:
+            KeyMap.parse("ctrl+a+b")
+
+        self.assertEqual(caught.exception.code, "bad-combo")
+
+    def test_wtype_names(self):
+        self.assertEqual(KeyMap.wtype_name("f5"), "F5")
+        self.assertEqual(KeyMap.wtype_name("c"), "c")
+        self.assertIsNone(KeyMap.wtype_name("nonexistent"))
+
+
+class PointerMoveTests(unittest.TestCase):
+    def test_pos_reads_the_cursor(self):
+        pointer_input, _ = make_input()
+
+        self.assertEqual(pointer_input.pos(), {"x": 0, "y": 0})
+
+    def test_move_is_verified(self):
+        pointer_input, runner = make_input()
+
+        result = pointer_input.move(500, 300)
+
+        self.assertTrue(result.verified)
+        self.assertEqual(runner.cursorpos(), "500,300")
+
+    def test_move_to_a_second_monitor_uses_displacement(self):
+        pointer_input, runner = make_input(FakeHyprland(monitors=DUAL_MONITORS))
+
+        result = pointer_input.move(2000, 100)
+
+        self.assertTrue(result.verified)
+        self.assertEqual(runner.cursorpos(), "2000,100")
+
+    def test_move_outside_the_desktop_refuses(self):
+        pointer_input, _ = make_input()
+
+        with self.assertRaises(ControlError) as caught:
+            pointer_input.move(5000, 100)
+
+        self.assertEqual(caught.exception.code, "move-not-verified")
+
+    def test_a_warp_that_never_lands_refuses(self):
+        pointer_input, runner = make_input()
+        runner.stubborn = True
+
+        with self.assertRaises(ControlError) as caught:
+            pointer_input.move(500, 300)
+
+        self.assertEqual(caught.exception.code, "move-not-verified")
+
+
+class PointerClickTests(unittest.TestCase):
+    def test_click_warps_then_clicks(self):
+        pointer_input, runner = make_input()
+
+        result = pointer_input.click(100, 200)
+
+        self.assertFalse(result.verified)
+        self.assertEqual(result.effect, "unverifiable")
+        self.assertEqual(result.details["button"], "L")
+        self.assertEqual(runner.cursorpos(), "100,200")
+        self.assertIn(["ydotool", "click", "0xC0"], runner.calls)
+
+    def test_right_and_middle_buttons(self):
+        pointer_input, runner = make_input()
+
+        pointer_input.click(10, 10, button="r")
+        pointer_input.click(10, 10, button="M")
+
+        self.assertIn(["ydotool", "click", "0xC1"], runner.calls)
+        self.assertIn(["ydotool", "click", "0xC2"], runner.calls)
+
+    def test_double_click_clicks_twice(self):
+        pointer_input, runner = make_input()
+
+        pointer_input.click(10, 10, double=True)
+
+        clicks = [call for call in runner.calls
+                  if call[:2] == ["ydotool", "click"]]
+        self.assertEqual(len(clicks), 2)
+
+    def test_bad_button_refuses(self):
+        pointer_input, _ = make_input()
+
+        with self.assertRaises(ControlError) as caught:
+            pointer_input.click(10, 10, button="Z")
+
+        self.assertEqual(caught.exception.code, "bad-args")
+
+    def test_click_without_coordinates_does_not_move(self):
+        pointer_input, runner = make_input()
+
+        pointer_input.click()
+
+        self.assertFalse(any(call[:2] == ["ydotool", "mousemove"]
+                             for call in runner.calls))
+
+
+class PointerScrollTests(unittest.TestCase):
+    def test_scroll_runs_the_wheel_device(self):
+        pointer_input, runner = make_input()
+
+        result = pointer_input.scroll("down", 3)
+
+        self.assertFalse(result.verified)
+        self.assertEqual(runner.calls[-1][0], "python3")
+        self.assertIn("range(3)", runner.calls[-1][-1])
+
+    def test_bad_direction_refuses(self):
+        pointer_input, _ = make_input()
+
+        with self.assertRaises(ControlError) as caught:
+            pointer_input.scroll("sideways", 1)
+
+        self.assertEqual(caught.exception.code, "bad-args")
+
+    def test_zero_amount_refuses(self):
+        pointer_input, _ = make_input()
+
+        with self.assertRaises(ControlError) as caught:
+            pointer_input.scroll("up", 0)
+
+        self.assertEqual(caught.exception.code, "bad-args")
+
+    def test_scroll_warps_when_given_a_point(self):
+        pointer_input, runner = make_input()
+
+        pointer_input.scroll("up", 1, 50, 60)
+
+        self.assertEqual(runner.cursorpos(), "50,60")
+
+
+class KeyboardTests(unittest.TestCase):
+    def test_ctrl_chord_goes_through_wtype(self):
+        keyboard_input, runner = make_input()
+
+        result = keyboard_input.key("ctrl+c")
+
+        self.assertFalse(result.verified)
+        self.assertIn(["wtype", "-M", "ctrl", "-k", "c", "-m", "ctrl"],
+                      runner.calls)
+
+    def test_super_chord_goes_through_ydotool(self):
+        keyboard_input, runner = make_input()
+
+        keyboard_input.key("super+return")
+
+        self.assertIn(["ydotool", "key", "125:1", "28:1", "28:0", "125:0"],
+                      runner.calls)
+
+    def test_forced_ydotool(self):
+        keyboard_input, runner = make_input()
+
+        keyboard_input.key("ctrl+c", force_ydotool=True)
+
+        self.assertIn(["ydotool", "key", "29:1", "46:1", "46:0", "29:0"],
+                      runner.calls)
+
+    def test_type_text(self):
+        keyboard_input, runner = make_input()
+
+        result = keyboard_input.type_text("hi\nthere")
+
+        self.assertFalse(result.verified)
+        self.assertIn(["wtype", "hi", "-k", "Return", "there"], runner.calls)
+
+    def test_literal_backslash_n_is_a_newline(self):
+        keyboard_input, runner = make_input()
+
+        keyboard_input.type_text("a\\nb")
+
+        self.assertIn(["wtype", "a", "-k", "Return", "b"], runner.calls)
+
+    def test_dash_prefixed_line_is_typed_literally(self):
+        keyboard_input, runner = make_input()
+
+        keyboard_input.type_text("-hello")
+
+        self.assertIn(["wtype", "--", "-hello"], runner.calls)
+
+    def test_type_failure_refuses(self):
+        keyboard_input, runner = make_input()
+        runner.stubborn = True  # unused here; keep the fake honest
+
+        class Failing(FakeInputRunner):
+            def run(self, argv, env=None, timeout=15, binary=False, input=None):
+                if argv and argv[0] == "wtype":
+                    import subprocess
+                    return subprocess.CompletedProcess(argv, 1, stdout="",
+                                                       stderr="boom")
+                return super().run(argv, env=env, timeout=timeout,
+                                   binary=binary, input=input)
+
+        failing = Failing()
+        session = Session(env=ENV, runner=failing, discoverer=FakeDiscoverer(ENV))
+
+        with self.assertRaises(ControlError) as caught:
+            Input(session).type_text("hi")
+
+        self.assertEqual(caught.exception.code, "type")
+
+
+if __name__ == "__main__":
+    unittest.main()

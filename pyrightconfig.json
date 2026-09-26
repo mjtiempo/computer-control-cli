@@ -1,0 +1,11 @@
+{
+  "include": ["computer_control_cli", "tests"],
+  "exclude": ["**/__pycache__", ".venv"],
+  "pythonVersion": "3.14",
+  "typeCheckingMode": "basic",
+  "venvPath": ".",
+  "venv": ".venv",
+  "extraPaths": ["."],
+  "reportMissingImports": "error",
+  "reportMissingModuleSource": "none"
+}

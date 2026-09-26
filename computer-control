@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Run the checkout without installing anything: the repo root goes on
+# PYTHONPATH and the package's CLI does the work.
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec env PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" python3 -m computer_control_cli "$@"

@@ -1,0 +1,332 @@
+"""The desktop: windows, workspaces, monitors, and effect-verified actions.
+
+Hyprland answers ``ok`` to a dispatch it did not apply, so every action here
+re-reads the desktop before it reports success: ``switch`` reads the active
+workspace back, ``focus`` reads the active window, ``close`` re-reads the
+window list, and ``move_window`` waits until the window's workspace changed.
+A read-back that does not see the effect refuses with a ``*-not-verified``
+code.
+"""
+
+from __future__ import annotations
+
+import re
+import time
+from typing import Any, Optional
+
+from computer_control_cli.coerce import Coerce  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.models import Monitor, Window, WindowSpec, Workspace  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.outcome import Outcome  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.session import Session  # pi-lens-ignore: reportMissingImports
+
+# How a dispatch is waited for, and how long: every loop re-reads, so the
+# bound only decides when a dispatch that will never apply becomes a refusal.
+POLL_TRIES = 20
+POLL_DELAY = 0.02
+CLOSE_SETTLE_SECONDS = 0.2
+CLOSE_APP_ROUNDS = 3
+
+
+class Desktop:
+    """The compositor's windows and workspaces, read and acted on."""
+
+    TERMINALS = ("foot", "footclient", "alacritty", "kitty", "ghostty",
+                 "wezterm", "konsole", "gnome-terminal", "gnome.terminal",
+                 "org.gnome.console", "org.gnome.terminal", "kgx",
+                 "xfce4-terminal", "terminator", "tilix", "xterm", "urxvt",
+                 "st", "tmux", "warp", "hyper", "contour", "tabby", "rio",
+                 "blackbox", "ptyxis")
+    BROWSERS = ("chromium", "chrome", "google-chrome", "brave",
+                "microsoft-edge", "vivaldi", "firefox", "librewolf", "zen",
+                "helium", "opera")
+    _SEPARATOR = re.compile(r"[._:\s]+")
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    # ---------------------------------------------------------------- reads
+    def clients(self) -> list[dict]:
+        """hyprctl's client rows that ARE objects."""
+        raw = self.session.hypr_json(["-j", "clients"])
+        return Coerce.rows(raw)
+
+    def windows(self) -> list[Window]:
+        """The mapped windows, parsed."""
+        return [window for window in
+                (Window.from_hypr(row) for row in self.clients()
+                 if row.get("mapped"))
+                if window is not None]
+
+    def active(self) -> Optional[Window]:
+        """The focused window, or None when nothing is focused."""
+        raw = self.session.hypr_json(["-j", "activewindow"])
+        return Window.from_hypr(raw) if isinstance(raw, dict) else None
+
+    def workspaces(self) -> list[Workspace]:
+        raw = self.session.hypr_json(["-j", "workspaces"])
+        rows = raw if isinstance(raw, list) else []
+        return [workspace for workspace in
+                (Workspace.from_hypr(row) for row in rows)
+                if workspace is not None]
+
+    def monitors(self) -> list[Monitor]:
+        return self.session.monitors()
+
+    def active_workspace_id(self) -> Optional[int]:
+        """The focused workspace's id, or None when the reply carries none."""
+        reply = self.session.hypr_json(["-j", "activeworkspace"])
+        if not isinstance(reply, dict) or "id" not in reply:
+            return None
+        return Coerce.as_int(reply.get("id"))
+
+    def state(self) -> dict[str, Any]:
+        """One snapshot: workspaces, windows, the active window, the pointer."""
+        pointer = self.session.cursor()
+        return {
+            "active_workspace": self.active_workspace_id(),
+            "workspaces": self.workspaces(),
+            "windows": self.windows(),
+            "active": self.active(),
+            "pointer": {"x": pointer[0], "y": pointer[1]},
+        }
+
+    # ----------------------------------------------------------- resolution
+    def matching(self, spec: str, rows: Optional[list[Window]] = None) -> list[Window]:
+        """Every window a target names (no refusal — callers decide)."""
+        parsed = WindowSpec.parse(spec)
+        return [window for window in (self.windows() if rows is None else rows)
+                if parsed.matches(window)]
+
+    def resolve(self, spec: str, action: str = "window") -> Window:
+        """The one window a target names. None or many refuses; never a pick."""
+        found = self.matching(spec)
+        if not found:
+            raise ControlError("window-not-found",
+                               f"{action}: no window matching {spec!r}")
+        if len(found) > 1:
+            names = ", ".join(f"{w.cls} {w.address}" for w in found[:4])
+            raise ControlError(
+                "ambiguous-window",
+                f"{action}: {len(found)} windows match {spec!r} ({names}) — "
+                "use address:0x… to pick one")
+        return found[0]
+
+    @classmethod
+    def class_matches(cls, window_class: str, names: tuple) -> bool:
+        """True when a window class IS one of ``names`` or carries it as a word.
+
+        A bare substring made ``steam`` a terminal (the ``st`` entry) and
+        ``zenity`` a browser (the ``zen`` entry).
+        """
+        normalized = cls._normalize(window_class)
+        if not normalized:
+            return False
+        for name in names:
+            wanted = cls._normalize(name)
+            if not wanted:
+                continue
+            if (normalized == wanted
+                    or normalized.startswith(wanted + "-")
+                    or normalized.endswith("-" + wanted)
+                    or f"-{wanted}-" in normalized):
+                return True
+        return False
+
+    @classmethod
+    def kind_of(cls, window: Window) -> str:
+        if cls.class_matches(window.cls, cls.TERMINALS):
+            return "terminal"
+        if cls.class_matches(window.cls, cls.BROWSERS):
+            return "browser"
+        return "other"
+
+    @classmethod
+    def select_kind(cls, windows: list[Window], kind: str = "terminal",
+                    match: str = "", keep: str = "") -> list[Window]:
+        """The windows of a kind, narrowed by ``match`` and spared by ``keep``."""
+        needle = match.lower()
+        spared = keep.lower()
+        selected = []
+        for window in windows:
+            if kind != "all" and cls.kind_of(window) != kind:
+                continue
+            if needle and needle not in window.cls.lower() \
+                    and needle not in window.title.lower():
+                continue
+            if spared and spared in window.cls.lower():
+                continue
+            selected.append(window)
+        return selected
+
+    @classmethod
+    def _normalize(cls, value: str) -> str:
+        return cls._SEPARATOR.sub("-", str(value or "").lower()).strip("-")
+
+    # ------------------------------------------------------ window actions
+    def switch(self, workspace: int) -> Outcome:
+        """Focus workspace N and prove the switch took."""
+        self.session.dispatch(f"hl.dsp.focus({{ workspace = {int(workspace)} }})")
+        seen = self._poll(lambda: self.active_workspace_id() == int(workspace))
+        if not seen:
+            raise ControlError(
+                "switch-not-verified",
+                f"switch: asked for workspace {int(workspace)} but the active "
+                f"workspace is {self.active_workspace_id()}")
+        return Outcome.confirmed("dispatch", workspace=int(workspace))
+
+    def focus(self, spec: str) -> Outcome:
+        """Set keyboard focus to one window and prove it took."""
+        window = self.resolve(spec, "focus")
+        self.session.dispatch(
+            f'hl.dsp.focus({{ window = "address:{window.address}", '
+            f'follow = true }})')
+        seen = self._poll(lambda: self._active_address() == window.address.lower())
+        if not seen:
+            current = self.active()
+            raise ControlError(
+                "focus-not-verified",
+                f"focus: {spec!r} did not take focus — active is "
+                f"{current.address if current else None!r}")
+        return Outcome.confirmed("dispatch", address=window.address,
+                                 **{"class": window.cls})
+
+    def close(self, spec: Optional[str] = None) -> Outcome:
+        """Close a window and prove it is gone.
+
+        With a target, close exactly that window; without one, close the
+        FOCUSED window — its address is read first, so both forms have a
+        read-back.
+        """
+        window = self.resolve(spec, "close") if spec else self.active()
+        address = window.address if window else ""
+        if not address:
+            self.session.dispatch("hl.dsp.window.close()")
+            return Outcome.unverifiable("dispatch", ok=False,
+                                        closed="focused window")
+        self.session.dispatch(
+            f'hl.dsp.window.close({{ window = "address:{address}" }})')
+        seen = self._poll(lambda: address.lower() not in self._open_addresses())
+        if not seen:
+            raise ControlError(
+                "close-not-verified",
+                f"close: {spec or 'the focused window'} ({address}) is still "
+                "open after the close dispatch")
+        return Outcome.confirmed("dispatch", address=address,
+                                 closed=(window.title or window.cls)
+                                 if window else "focused window")
+
+    def move_window(self, spec: str, workspace: Any) -> Outcome:
+        """Move one window to a workspace and return once it is read back."""
+        window = self.resolve(spec, "move-window")
+        wanted = str(workspace).strip()
+        self.session.dispatch(
+            f'hl.dsp.window.move({{ window = "address:{window.address}", '
+            f'workspace = "{wanted}" }})')
+        wanted_row = wanted.removeprefix("name:")
+
+        def is_there() -> bool:
+            for row in self.clients():
+                if str(row.get("address", "")).lower() != window.address.lower():
+                    continue
+                here = row.get("workspace")
+                here = here if isinstance(here, dict) else {}
+                return (str(here.get("id")) == wanted_row
+                        or str(here.get("name")) == wanted_row)
+            return False
+
+        seen = self._poll(is_there)
+        if not seen:
+            raise ControlError(
+                "move-not-verified",
+                f"move-window: {window.address} is not on workspace {wanted} "
+                "after the move dispatch")
+        return Outcome.confirmed("dispatch", address=window.address,
+                                 workspace=wanted)
+
+    def close_apps(self, kind: str = "terminal", match: str = "",
+                   keep: str = "", dry_run: bool = False,
+                   rounds: int = CLOSE_APP_ROUNDS) -> Outcome:
+        """Close every window of a kind, proving each one gone.
+
+        Read the list, classify, close each by ADDRESS (a dispatcher named by
+        address is not scoped to the focused workspace), then re-read and
+        repeat. A window that survives every round is REPORTED.
+        """
+        selected = self.select_kind(self.windows(), kind, match, keep)
+        if dry_run:
+            return Outcome.unverifiable(
+                "dispatch", ok=False, dry_run=True, kind=kind, match=match,
+                keep=keep, count=len(selected),
+                windows=[window.brief() for window in selected])
+        if not selected:
+            return Outcome.confirmed("dispatch", kind=kind, match=match,
+                                     keep=keep, closed=[], remaining=[],
+                                     rounds=0)
+
+        closed: list[dict] = []
+        spent = 0
+        while spent < max(1, rounds):
+            targets = self.select_kind(self.windows(), kind, match, keep)
+            if not targets:
+                break
+            spent += 1
+            pending = {window.address.lower() for window in targets}
+            for window in targets:
+                self.session.dispatch(
+                    f'hl.dsp.window.close({{ window = "address:{window.address}" }})')
+            deadline = time.time() + CLOSE_SETTLE_SECONDS
+            while pending and time.time() < deadline:
+                pending &= self._open_addresses()
+                if pending:
+                    time.sleep(POLL_DELAY)
+            live = self._open_addresses()
+            for window in targets:
+                if window.address.lower() not in live:
+                    closed.append(window.brief())
+
+        remaining = [window.brief() for window in
+                     self.select_kind(self.windows(), kind, match, keep)]
+        if remaining:
+            return Outcome.unverifiable("dispatch", ok=False, kind=kind,
+                                        match=match, keep=keep,
+                                        closed=closed, remaining=remaining,
+                                        rounds=spent)
+        return Outcome.confirmed("dispatch", kind=kind, match=match, keep=keep,
+                                 closed=closed, remaining=[], rounds=spent)
+
+    def wait(self, spec: str = "", gone: bool = False, timeout: float = 15.0,
+             poll: float = 0.05) -> Outcome:
+        """Block until a matching window appears (or, with ``gone``, is gone)."""
+        deadline = time.time() + max(0.0, float(timeout))
+        while True:
+            found = self.matching(spec) if spec else self.windows()
+            satisfied = not found if gone else bool(found)
+            if satisfied:
+                if gone:
+                    return Outcome.confirmed("poll", gone=True)
+                return Outcome.confirmed("poll", window=found[0].brief())
+            if time.time() >= deadline:
+                raise ControlError(
+                    "wait-timeout",
+                    f"wait-window: {spec!r} "
+                    f"{'is still open' if gone else 'did not appear'} "
+                    f"within {timeout:g}s")
+            time.sleep(min(poll, max(0.0, deadline - time.time())))
+
+    # ------------------------------------------------------------ internals
+    def _active_address(self) -> str:
+        window = self.active()
+        return window.address.lower() if window else ""
+
+    def _open_addresses(self) -> set:
+        return {str(row.get("address", "")).lower() for row in self.clients()}
+
+    @staticmethod
+    def _poll(condition) -> bool:
+        """Run ``condition`` until it holds, up to the shared poll budget."""
+        for _ in range(POLL_TRIES):
+            if condition():
+                return True
+            time.sleep(POLL_DELAY)
+        return bool(condition())
