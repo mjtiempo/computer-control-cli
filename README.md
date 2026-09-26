@@ -35,7 +35,7 @@ Or install a link into a prefix:
 | --- | --- |
 | Desktop state | `state` `windows` `active` `workspaces` `monitors` `pos` |
 | Screen | `screen [--monitor NAME] [--out DIR] [--no-cursor]` `region X Y W H` `active-screen [--window SPEC]` |
-| System | `system` (cpu, model, memory, swap, disk, network, battery, thermal) · `clipboard get\|set\|clear\|types [--primary] [--type MIME] [--file PATH] [--out FILE]` · `log [N] [--since TS] [--text]` |
+| System | `system` (cpu, model, memory, swap, disk, network, battery, thermal) · `clipboard get\|set\|clear\|types [--primary] [--type MIME] [--file PATH] [--out FILE]` · `log [N] [--since TS] [--text] [--follow]` |
 | Windows / workspaces | `switch N` `focus SPEC` `close [SPEC]` `close-apps --kind K [--dry-run]` `move-window SPEC N` `wait-window [SPEC] [--gone] [--new] [--exclude A,B] [--title S] [--class S] [--stable N] [--timeout S]` |
 | Apps | `apps` (entries + running processes) `which NAME` `dir PATH [--create]` `app-open NAME [--workspace N] [--cwd DIR] [--dry-run]` `launch [--workspace N] [--no-wait] PROGRAM [ARGS…]` |
 | Pointer | `pos` `move X Y` `click [X Y] [--button L\|R\|M] [--double]` `scroll DIR AMOUNT [X Y]` `drag X1 Y1 X2 Y2 [--button B] [--duration MS]` |
@@ -45,7 +45,17 @@ Or install a link into a prefix:
 | Batch | `sequence '[["pos"],["move","100","200"]]'` |
 
 Global flags: `--version`, `--instance SIGNATURE`, `--display NAME` (target
-another Hyprland instance or Wayland display).
+another Hyprland instance or Wayland display), `--quiet` (stdout only; exit
+codes and `ERR[code]` still apply), `--dry-run` (mutating verbs report what
+they would do — verbs with their own dry-run plan, like `close-apps` and
+`app-open`, produce that richer plan — reads still read), and `--timeout SEC`
+(the default window-wait timeout; a verb's own `--timeout` wins).
+
+The pointer and keyboard verbs take `--clearmodifiers` (release every
+modifier first — both `shift`s, `ctrl`s, `alt`s and `super`s — so a stuck hold
+cannot colour the action; this is ydotool-only, because wtype releases what it
+pressed when it exits). `log --follow` tails the action log, one entry per
+line, until interrupted.
 
 Window targets are `class:`, `title:`, `address:0x…`, or a bare name. Several
 matches refuse (`ERR[ambiguous-window]`); there is no silent first match.
@@ -114,7 +124,7 @@ whole stack runs against a double.
 ## Testing
 
 ```bash
-python3 -m unittest                          # 320 hermetic checks, no desktop
+python3 -m unittest                          # 340 hermetic checks, no desktop
 CCC_LIVE=1 python3 -m unittest tests.test_live -v      # 12 service-level live checks
 CCC_LIVE=1 python3 -m unittest tests.test_live_cli -v  # 26 CLI-level live checks
 pyright                                      # static gate

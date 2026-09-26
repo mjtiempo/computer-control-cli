@@ -235,8 +235,22 @@ class Pointer:
 class Keyboard:
     """wtype and ydotool key events."""
 
+    # Both sides of every modifier, released by `--clearmodifiers`. Releasing
+    # a key that is not held is harmless; a modifier left held colours the
+    # next action.
+    MODIFIER_RELEASE_CODES = (29, 97, 56, 100, 42, 54, 125, 126)
+
     def __init__(self, session: Session):
         self.session = session
+
+    def clear_modifiers(self) -> None:
+        """Release every modifier. ydotool only: its state persists."""
+        sequence = [f"{code}:0" for code in self.MODIFIER_RELEASE_CODES]
+        proc = self.session.run(["ydotool", "key", *sequence])
+        if proc.returncode != 0:
+            raise ControlError("ydotool",
+                               f"ydotool key failed: "
+                               f"{(proc.stderr or '').strip()}")
 
     def chord(self, codes: list[int]) -> None:
         sequence = [f"{code}:1" for code in codes] \
@@ -321,8 +335,10 @@ class Input:
         return {"x": x, "y": y}
 
     # -------------------------------------------------------------- motion
-    def move(self, x: int, y: int) -> Outcome:
+    def move(self, x: int, y: int, clearmodifiers: bool = False) -> Outcome:
         """Move the pointer and PROVE the warp landed, or refuse."""
+        if clearmodifiers:
+            self.keyboard.clear_modifiers()
         want = (int(x), int(y))
         self.warp(want[0], want[1])
         return Outcome.confirmed("px", x=want[0], y=want[1])
@@ -380,8 +396,11 @@ class Input:
         return last
 
     def click(self, x: Optional[int] = None, y: Optional[int] = None,
-              button: str = "L", double: bool = False) -> Outcome:
+              button: str = "L", double: bool = False,
+              clearmodifiers: bool = False) -> Outcome:
         """Click at a point, or at the pointer when no coordinates are given."""
+        if clearmodifiers:
+            self.keyboard.clear_modifiers()
         button = str(button).upper()
         code = KeyMap.BUTTONS.get(button)
         if code is None:
@@ -401,7 +420,10 @@ class Input:
                                     x=x, y=y)
 
     def scroll(self, direction: str, amount: int,
-               x: Optional[int] = None, y: Optional[int] = None) -> Outcome:
+               x: Optional[int] = None, y: Optional[int] = None,
+               clearmodifiers: bool = False) -> Outcome:
+        if clearmodifiers:
+            self.keyboard.clear_modifiers()
         if direction not in ("up", "down", "left", "right"):
             raise ControlError("bad-args",
                                f"scroll: bad direction {direction!r}")
@@ -418,8 +440,11 @@ class Input:
         return Outcome.unverifiable("pt", direction=direction, amount=amount)
 
     # ------------------------------------------------------------ keyboard
-    def key(self, combo: str, force_ydotool: bool = False) -> Outcome:
+    def key(self, combo: str, force_ydotool: bool = False,
+            clearmodifiers: bool = False) -> Outcome:
         """Press a chord through the route that fits it."""
+        if clearmodifiers:
+            self.keyboard.clear_modifiers()
         parsed = KeyMap.parse(combo)
         keysym = KeyMap.wtype_name(parsed.key)
         if (not force_ydotool and keysym
@@ -432,25 +457,33 @@ class Input:
             route = "ydotool"
         return Outcome.unverifiable("input", combo=combo, route=route)
 
-    def type_text(self, text: str, delay_ms: int = 0) -> Outcome:
+    def type_text(self, text: str, delay_ms: int = 0,
+                  clearmodifiers: bool = False) -> Outcome:
         """Type text; both a literal ``\\n`` and a real newline mean Return."""
         replaced = str(text).replace("\\n", "\n")
+        if clearmodifiers:
+            self.keyboard.clear_modifiers()
         self.keyboard.type_text(replaced, delay_ms)
         return Outcome.unverifiable("input", chars=len(str(text)),
                                     delay_ms=delay_ms)
 
-    def key_down(self, combo: str) -> Outcome:
+    def key_down(self, combo: str, clearmodifiers: bool = False) -> Outcome:
         """Hold a chord's keys down (a drag for the keyboard)."""
+        if clearmodifiers:
+            self.keyboard.clear_modifiers()
         self.keyboard.key_state(KeyMap.parse(combo), down=True)
         return Outcome.unverifiable("input", combo=combo, state="down")
 
-    def key_up(self, combo: str) -> Outcome:
+    def key_up(self, combo: str, clearmodifiers: bool = False) -> Outcome:
         """Release a chord's keys."""
+        if clearmodifiers:
+            self.keyboard.clear_modifiers()
         self.keyboard.key_state(KeyMap.parse(combo), down=False)
         return Outcome.unverifiable("input", combo=combo, state="up")
 
     def drag(self, x1: int, y1: int, x2: int, y2: int, button: str = "L",
-             duration_ms: int = 300, steps: int = 12) -> Outcome:
+             duration_ms: int = 300, steps: int = 12,
+             clearmodifiers: bool = False) -> Outcome:
         """Press at the start, move to the end, release — release ALWAYS.
 
         The release is in a ``finally``: a failed movement must not leave the
@@ -462,6 +495,8 @@ class Input:
             raise ControlError("bad-args",
                                f"drag: bad button {button!r} "
                                "(expected L, R or M)")
+        if clearmodifiers:
+            self.keyboard.clear_modifiers()
         start_x, start_y = int(x1), int(y1)
         end_x, end_y = int(x2), int(y2)
         steps = max(1, int(steps))

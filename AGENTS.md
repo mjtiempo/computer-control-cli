@@ -73,6 +73,18 @@ for pyright and exists only to keep the editor quiet.
 * Effects are read back. Hyprland answers `ok` to dispatches it did not apply,
   so `Desktop` re-reads before reporting `confirmed` and refuses with
   `*-not-verified` otherwise.
+* `--dry-run` acts at the CLI boundary: a mutating verb returns a plan without
+  calling its service (a verb with a native `--dry-run`, like `close-apps`,
+  produces its own richer plan); reads still read.
+* `--quiet` suppresses stdout only; refusals stay on stderr and exit codes do
+  not change. A capture under `--quiet` needs `--out`.
+* Global `--timeout` is the default window-wait timeout; the verb's own
+  `--timeout` wins. The global flag uses its own argparse dest
+  (`timeout_default`), because a subparser's default for the same dest
+  silently overwrites the parent's value.
+* `--clearmodifiers` releases every modifier through ydotool before an input
+  action: wtype releases what it pressed when the process exits, so only
+  ydotool's state can be held (or cleared) across calls.
 * Ambiguity refuses; name the candidates.
 * A failure a caller can produce is a `ControlError` with an actionable code,
   never a traceback. A child program's `ERR[code]` line is re-raised verbatim

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from computer_control_cli.config import Config  # pi-lens-ignore: reportMissingImports
 
@@ -65,23 +65,75 @@ class ActionLog:
 
         ``since`` keeps entries whose ISO timestamp sorts at or after it.
         """
+        return self._read_tail(count, since)[0]
+
+    @staticmethod
+    def _parse(line: str) -> Optional[dict]:
         try:
-            with open(self.path(), encoding="utf-8") as handle:
-                lines = handle.readlines()
+            row = json.loads(line)
+        except ValueError:
+            return None
+        return row if isinstance(row, dict) else None
+
+    def _read_tail(self, count: int,
+                   since: Optional[str] = None) -> tuple[list[dict], int]:
+        """(the last entries, the byte offset after reading them).
+
+        One read answers both: a follower must start where this read ended,
+        or an entry appended in between is lost.
+        """
+        try:
+            with open(self.path(), "rb") as handle:
+                data = handle.read()
+                position = handle.tell()
         except OSError:
-            return []
+            return [], 0
         entries = []
-        for line in lines:
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(row, dict):
+        for line in data.decode("utf-8", errors="replace").splitlines():
+            row = self._parse(line)
+            if row is None:
                 continue
             if since and str(row.get("ts", "")) < str(since):
                 continue
             entries.append(row)
-        return entries[-max(1, int(count)):]
+        return entries[-max(1, int(count)):], position
+
+    def follow(self, count: int = 10, since: Optional[str] = None,
+               poll: float = 0.25) -> Iterator[dict]:
+        """Yield the last ``count`` entries, then every line appended after.
+
+        The generator ends when its consumer stops iterating (Ctrl+C at the
+        CLI). Truncation or rotation resets it to the start of the file.
+        """
+        backlog, position = self._read_tail(count, since)
+        pending = ""
+        for entry in backlog:
+            yield entry
+        while True:
+            try:
+                size = os.path.getsize(self.path())
+            except OSError:
+                time.sleep(poll)
+                continue
+            if size < position:
+                position, pending = 0, ""
+            if size > position:
+                try:
+                    with open(self.path(), "rb") as handle:
+                        handle.seek(position)
+                        chunk = handle.read()
+                        position = handle.tell()
+                except OSError:
+                    time.sleep(poll)
+                    continue
+                pending += chunk.decode("utf-8", errors="replace")
+                while "\n" in pending:
+                    line, _, pending = pending.partition("\n")
+                    row = self._parse(line)
+                    if row is not None:
+                        yield row
+                continue
+            time.sleep(poll)
 
     @staticmethod
     def render(entries: list[dict]) -> list[str]:

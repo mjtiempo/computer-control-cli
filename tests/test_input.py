@@ -9,7 +9,7 @@ form takes and what it sends.
 import unittest
 
 from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
-from computer_control_cli.input import Input, KeyMap  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.input import Input, KeyMap, Keyboard  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.session import Session  # pi-lens-ignore: reportMissingImports
 
 from tests.fakes import FakeDiscoverer, FakeHyprland, FakeInputRunner  # pi-lens-ignore: reportMissingImports
@@ -308,6 +308,50 @@ class KeyboardHoldTests(unittest.TestCase):
         keyboard_input.key_up("super+return")
 
         self.assertIn(["ydotool", "key", "125:0", "28:0"], runner.calls)
+
+    def test_clearmodifiers_releases_before_the_action(self):
+        keyboard_input, runner = make_input()
+        release = ["ydotool", "key"] + [f"{code}:0"
+                                         for code in Keyboard.MODIFIER_RELEASE_CODES]
+
+        keyboard_input.key("ctrl+c", clearmodifiers=True)
+
+        self.assertEqual(runner.calls[0], release)
+        self.assertIn(["wtype", "-M", "ctrl", "-k", "c", "-m", "ctrl"],
+                      runner.calls)
+
+    def test_clearmodifiers_on_key_holds(self):
+        keyboard_input, runner = make_input()
+        release = ["ydotool", "key"] + [f"{code}:0"
+                                         for code in Keyboard.MODIFIER_RELEASE_CODES]
+
+        keyboard_input.key_down("shift+a", clearmodifiers=True)
+        keyboard_input.key_up("shift+a", clearmodifiers=True)
+
+        self.assertEqual(runner.calls[0], release)
+        self.assertEqual(runner.calls[2], release)
+        self.assertEqual(runner.calls[1], ["ydotool", "key", "42:1", "30:1"])
+        self.assertEqual(runner.calls[3], ["ydotool", "key", "42:0", "30:0"])
+
+    def test_clearmodifiers_on_type_click_and_drag(self):
+        keyboard_input, runner = make_input()
+        release = ["ydotool", "key"] + [f"{code}:0"
+                                         for code in Keyboard.MODIFIER_RELEASE_CODES]
+
+        keyboard_input.type_text("hi", clearmodifiers=True)
+        keyboard_input.click(10, 10, clearmodifiers=True)
+        keyboard_input.drag(1, 1, 2, 2, duration_ms=0, clearmodifiers=True)
+
+        releases = [call for call in runner.calls if call == release]
+        self.assertEqual(len(releases), 3)
+
+    def test_clearmodifiers_defaults_to_off(self):
+        keyboard_input, runner = make_input()
+
+        keyboard_input.type_text("hi")
+
+        self.assertFalse(any(call[:2] == ["ydotool", "key"] and all(
+            part.endswith(":0") for part in call[2:]) for call in runner.calls))
 
 
 class BreakingRunner(FakeInputRunner):

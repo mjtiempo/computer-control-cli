@@ -12,6 +12,9 @@ from unittest import mock
 from computer_control_cli.a11y import A11y  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.cli import Cli  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.config import Config  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.desktop import Desktop  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.input import Keyboard  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.log import ActionLog  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.session import Session  # pi-lens-ignore: reportMissingImports
 
 from tests.fakes import FakeDiscoverer, FakeHyprland, FakeInputRunner  # pi-lens-ignore: reportMissingImports
@@ -219,6 +222,14 @@ class CliInputTests(CliFixture):
 
         self.assertIn(["ydotool", "key", "29:1", "46:1"], self.runner.calls)
         self.assertIn(["ydotool", "key", "29:0", "46:0"], self.runner.calls)
+
+    def test_clearmodifiers_releases_before_typing(self):
+        release = ["ydotool", "key"] + [f"{code}:0"
+                                         for code in Keyboard.MODIFIER_RELEASE_CODES]
+
+        self.run_json("type", "hi", "--clearmodifiers")
+
+        self.assertEqual(self.runner.calls[0], release)
 
     def test_drag(self):
         result = self.run_json("drag", "100", "100", "300", "200",
@@ -441,6 +452,119 @@ class CliSequenceTests(CliFixture):
 
         self.assertEqual(code, 1)
         self.assertIn("ERR[bad-args]", stderr)
+
+
+class StubFollow:
+    """Stands in for ``ActionLog.follow`` so a test can end the stream."""
+
+    def __init__(self, entries):
+        self.entries = entries
+
+    def __call__(self, count=10, since=None, poll=0.25):
+        yield from self.entries
+
+
+class StubWait:
+    """Records the timeout ``Desktop.wait`` was called with."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, _desktop, spec="", **kwargs):
+        self.calls.append({"spec": spec, **kwargs})
+        return {}
+
+
+class CliGlobalFlagTests(CliFixture):
+    def test_quiet_suppresses_stdout(self):
+        code, stdout, _ = self.run_cli("--quiet", "pos")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout, "")
+
+    def test_quiet_keeps_refusals_on_stderr(self):
+        code, stdout, stderr = self.run_cli("--quiet", "focus",
+                                            "class:missing")
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn("ERR[window-not-found]", stderr)
+
+    def test_global_dry_run_plans_without_acting(self):
+        result = self.run_json("--dry-run", "switch", "2")
+
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(self.hypr.active_workspace, 1)
+        self.assertEqual(self.hypr.dispatch_log, [])
+
+    def test_global_dry_run_does_not_move_the_pointer(self):
+        before = self.runner.cursorpos()
+
+        result = self.run_json("--dry-run", "move", "500", "300")
+
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(self.runner.cursorpos(), before)
+
+    def test_global_dry_run_leaves_reads_alone(self):
+        result = self.run_json("--dry-run", "state")
+
+        self.assertIn("active_workspace", result)
+        self.assertNotIn("dry_run", result)
+
+    def test_global_dry_run_uses_the_verbs_own_plan(self):
+        before = len(self.hypr.clients)
+
+        result = self.run_json("--dry-run", "close-apps",
+                               "--kind", "terminal")
+
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(len(self.hypr.clients), before)
+
+    def test_global_timeout_bounds_window_waits(self):
+        code, _, stderr = self.run_cli("--timeout", "0", "wait-window",
+                                       "class:nope")
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[wait-timeout]", stderr)
+
+    def test_global_timeout_reaches_the_verb(self):
+        stub = StubWait()
+
+        with mock.patch.object(Desktop, "wait", stub):
+            self.run_json("--timeout", "3", "wait-window", "class:foot")
+
+        self.assertEqual(stub.calls[0]["timeout"], 3.0)
+
+    def test_the_verbs_own_timeout_wins(self):
+        code, _, stderr = self.run_cli("--timeout", "5", "wait-window",
+                                       "class:nope", "--timeout", "0")
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[wait-timeout]", stderr)
+
+
+class CliLogFollowTests(CliFixture):
+    ENTRIES = [{"ts": "2026-01-01T00:00:00", "action": "move",
+                "ok": True},
+               {"ts": "2026-01-01T00:00:01", "action": "state",
+                "ok": True}]
+
+    def test_follow_prints_one_entry_per_line(self):
+        with mock.patch.object(ActionLog, "follow", StubFollow(self.ENTRIES)):
+            code, stdout, _ = self.run_cli("log", "--follow")
+
+        lines = [line for line in stdout.splitlines() if line.strip()]
+        self.assertEqual(code, 0)
+        self.assertEqual(len(lines), 2)
+        self.assertIn('"action":"move"', lines[0])
+
+    def test_follow_text_mode(self):
+        with mock.patch.object(ActionLog, "follow", StubFollow(self.ENTRIES)):
+            code, stdout, _ = self.run_cli("log", "--follow", "--text")
+
+        self.assertEqual(code, 0)
+        self.assertIn("move ok", stdout)
 
 
 class CliRefusalTests(CliFixture):

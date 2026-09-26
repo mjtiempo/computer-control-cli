@@ -47,6 +47,15 @@ class ParserBuilder:
                                  help="target this Hyprland instance signature")
         self.parser.add_argument("--display", default="",
                                  help="target this Wayland display")
+        self.parser.add_argument("--quiet", action="store_true",
+                                 help="suppress stdout (exit codes and "
+                                      "refusals still apply)")
+        self.parser.add_argument("--dry-run", dest="dry_run_all",
+                                 action="store_true",
+                                 help="report actions without doing them")
+        self.parser.add_argument("--timeout", dest="timeout_default",
+                                 type=float, default=None,
+                                 help="default window-wait timeout in seconds")
         self.subs = self.parser.add_subparsers(dest="verb", metavar="VERB")
 
     def verb(self, name: str, help_text: str) -> argparse.ArgumentParser:
@@ -89,6 +98,8 @@ class ParserBuilder:
         log.add_argument("count", nargs="?", type=int, default=50)
         log.add_argument("--since", default="")
         log.add_argument("--text", action="store_true")
+        log.add_argument("--follow", action="store_true",
+                         help="tail the log, one entry per line")
 
     def screen_verbs(self) -> None:
         screen = self.verb("screen", "full screenshot (PNG bytes)")
@@ -124,7 +135,7 @@ class ParserBuilder:
         wait_window = self.verb("wait-window", "block until a window exists")
         wait_window.add_argument("spec", nargs="?", default="")
         wait_window.add_argument("--gone", action="store_true")
-        wait_window.add_argument("--timeout", type=float, default=15.0)
+        wait_window.add_argument("--timeout", type=float, default=None)
         wait_window.add_argument("--new", dest="new_only", action="store_true")
         wait_window.add_argument("--exclude", default="")
         wait_window.add_argument("--title", default="")
@@ -135,12 +146,13 @@ class ParserBuilder:
         launch = self.verb("launch", "start a program")
         launch.add_argument("--no-wait", action="store_true")
         launch.add_argument("--workspace", type=int, default=0)
+        launch.add_argument("--timeout", type=float, default=None)
         launch.add_argument("program", nargs=argparse.REMAINDER)
         app_open = self.verb("app-open", "open an app and return its window")
         app_open.add_argument("name")
         app_open.add_argument("--workspace", type=int, default=0)
         app_open.add_argument("--cwd", default="")
-        app_open.add_argument("--timeout", type=float, default=15.0)
+        app_open.add_argument("--timeout", type=float, default=None)
         app_open.add_argument("--dry-run", action="store_true")
         which = self.verb("which", "where a program resolves")
         which.add_argument("name")
@@ -152,6 +164,7 @@ class ParserBuilder:
         move = self.verb("move", "move the pointer (verified)")
         move.add_argument("x", type=int)
         move.add_argument("y", type=int)
+        move.add_argument("--clearmodifiers", action="store_true")
         click = self.verb("click", "click at a point, at the pointer, or an "
                                   "AT-SPI element")
         click.add_argument("x", nargs="?", type=int)
@@ -159,21 +172,27 @@ class ParserBuilder:
         click.add_argument("--button", default="L")
         click.add_argument("--double", action="store_true")
         click.add_argument("--el", type=int, default=None)
+        click.add_argument("--clearmodifiers", action="store_true")
         scroll = self.verb("scroll", "scroll at the pointer or at X Y")
         scroll.add_argument("direction")
         scroll.add_argument("amount", type=int)
         scroll.add_argument("x", nargs="?", type=int)
         scroll.add_argument("y", nargs="?", type=int)
+        scroll.add_argument("--clearmodifiers", action="store_true")
         key = self.verb("key", "press a key chord")
         key.add_argument("combo")
         key.add_argument("--ydotool", action="store_true")
+        key.add_argument("--clearmodifiers", action="store_true")
         key_down = self.verb("key-down", "hold a chord's keys down")
         key_down.add_argument("combo")
+        key_down.add_argument("--clearmodifiers", action="store_true")
         key_up = self.verb("key-up", "release a chord's keys")
         key_up.add_argument("combo")
+        key_up.add_argument("--clearmodifiers", action="store_true")
         type_ = self.verb("type", "type text into the focused window")
         type_.add_argument("text")
         type_.add_argument("--delay", type=int, default=0)
+        type_.add_argument("--clearmodifiers", action="store_true")
         drag = self.verb("drag", "press, move and release the pointer")
         drag.add_argument("x1", type=int)
         drag.add_argument("y1", type=int)
@@ -181,6 +200,7 @@ class ParserBuilder:
         drag.add_argument("y2", type=int)
         drag.add_argument("--button", default="L")
         drag.add_argument("--duration", type=int, default=300)
+        drag.add_argument("--clearmodifiers", action="store_true")
         clipboard = self.verb("clipboard",
                               "read, write, clear, or list the clipboard")
         clipboard.add_argument("mode",
@@ -204,6 +224,9 @@ class Cli:
         self._argv = list(sys.argv[1:] if argv is None else argv)
         self._injected_session = session
         self.config = config or Config()
+        self.quiet = False
+        self.dry_run = False
+        self.default_timeout = 15.0
         self.build_services()
 
     # --------------------------------------------------------------- wiring
@@ -265,12 +288,31 @@ class Cli:
         return self.audit.audit(no_probe=args.no_probe, no_a11y=args.no_a11y)
 
     def cmd_log(self, args) -> Any:
+        if args.follow:
+            self.follow_log(args)
+            return None
         entries = self.log.entries(args.count, since=args.since or None)
         if args.text:
-            for line in ActionLog.render(entries):
-                print(line)
+            if not self.quiet:
+                for line in ActionLog.render(entries):
+                    print(line)
             return None
         return entries
+
+    def follow_log(self, args) -> None:
+        """Tail the action log: one line per entry until interrupted."""
+        try:
+            for entry in self.log.follow(args.count,
+                                         since=args.since or None):
+                if self.quiet:
+                    continue
+                if args.text:
+                    print(ActionLog.render([entry])[0], flush=True)
+                else:
+                    print(json.dumps(entry, separators=(",", ":")),
+                          flush=True)
+        except KeyboardInterrupt:
+            return
 
     def cmd_screen(self, args) -> Any:
         if args.monitor:
@@ -319,20 +361,26 @@ class Cli:
     def cmd_wait_window(self, args) -> Any:
         exclude = {part.strip().lower()
                    for part in str(args.exclude).split(",") if part.strip()}
+        timeout = (args.timeout if args.timeout is not None
+                   else self.default_timeout)
         return self.desktop.wait(args.spec, gone=args.gone,
-                                 timeout=args.timeout, new_only=args.new_only,
+                                 timeout=timeout, new_only=args.new_only,
                                  exclude=exclude, title=args.title,
                                  klass=args.klass, stable=args.stable)
 
     def cmd_launch(self, args) -> Any:
         if not args.program:
             raise ControlError("bad-args", "launch: a program is required")
+        timeout = (args.timeout if args.timeout is not None
+                   else self.default_timeout)
         return self.apps.launch(args.program, wait=not args.no_wait,
-                                workspace=args.workspace)
+                                workspace=args.workspace, timeout=timeout)
 
     def cmd_app_open(self, args) -> Any:
+        timeout = (args.timeout if args.timeout is not None
+                   else self.default_timeout)
         return self.apps.open(args.name, workspace=args.workspace,
-                              cwd=args.cwd, timeout=args.timeout,
+                              cwd=args.cwd, timeout=timeout,
                               dry_run=args.dry_run)
 
     def cmd_which(self, args) -> Any:
@@ -342,7 +390,7 @@ class Cli:
         return self.apps.dir(args.path, create=args.create)
 
     def cmd_move(self, args) -> Any:
-        return self.input.move(args.x, args.y)
+        return self.input.move(args.x, args.y, args.clearmodifiers)
 
     def cmd_click(self, args) -> Any:
         if args.el is not None:
@@ -355,26 +403,30 @@ class Cli:
                     "click --el does not support --double (AT-SPI has no "
                     "double-click action); click by pixels instead")
             return self.a11y.click_element(args.el, args.button)
-        return self.input.click(args.x, args.y, args.button, args.double)
+        return self.input.click(args.x, args.y, args.button, args.double,
+                                args.clearmodifiers)
 
     def cmd_scroll(self, args) -> Any:
-        return self.input.scroll(args.direction, args.amount, args.x, args.y)
+        return self.input.scroll(args.direction, args.amount, args.x, args.y,
+                                 args.clearmodifiers)
 
     def cmd_key(self, args) -> Any:
-        return self.input.key(args.combo, args.ydotool)
+        return self.input.key(args.combo, args.ydotool, args.clearmodifiers)
 
     def cmd_key_down(self, args) -> Any:
-        return self.input.key_down(args.combo)
+        return self.input.key_down(args.combo, args.clearmodifiers)
 
     def cmd_key_up(self, args) -> Any:
-        return self.input.key_up(args.combo)
+        return self.input.key_up(args.combo, args.clearmodifiers)
 
     def cmd_type(self, args) -> Any:
-        return self.input.type_text(args.text, args.delay)
+        return self.input.type_text(args.text, args.delay,
+                                    args.clearmodifiers)
 
     def cmd_drag(self, args) -> Any:
         return self.input.drag(args.x1, args.y1, args.x2, args.y2,
-                               args.button, args.duration)
+                               args.button, args.duration,
+                               args.clearmodifiers)
 
     def cmd_clipboard(self, args) -> Any:
         primary = bool(getattr(args, "primary", False))
@@ -465,6 +517,11 @@ class Cli:
         if handler is None:
             raise ControlError("bad-args",
                                f"sequence: no verb called {verb!r}")
+        if self.dry_run and self.mutates(verb, args):
+            if hasattr(args, "dry_run"):
+                args.dry_run = True
+            else:
+                return self.plan()
         result = handler(args)
         if isinstance(result, bytes):
             raise ControlError(
@@ -478,6 +535,10 @@ class Cli:
             args = parser.parse_args(self._argv)
         except SystemExit as exit_error:  # --help, --version, bad usage
             return int(exit_error.code or 0)
+        self.quiet = bool(getattr(args, "quiet", False))
+        self.dry_run = bool(getattr(args, "dry_run_all", False))
+        if getattr(args, "timeout_default", None) is not None:
+            self.default_timeout = float(args.timeout_default)
         if getattr(args, "instance", "") or getattr(args, "display", ""):
             try:
                 self.build_services(args.instance, args.display)
@@ -492,6 +553,13 @@ class Cli:
         if handler is None:
             print(parser.format_usage().rstrip(), file=sys.stderr)
             return 2
+        if self.dry_run and self.mutates(verb, args):
+            if hasattr(args, "dry_run"):
+                args.dry_run = True          # the verb has its own, richer plan
+            else:
+                self.log.write(verb, ok=True, args=self.log_args(verb),
+                               detail="dry-run")
+                return self.present(self.plan())
         try:
             result = handler(args)
         except ControlError as error:
@@ -504,12 +572,33 @@ class Cli:
         return self.present(result)
 
     def present(self, result: Any) -> int:
+        if self.quiet:
+            return 0
         if isinstance(result, bytes):
             sys.stdout.buffer.write(result)
             return 0
         if result is None:
             return 0
         return self.emit(result)
+
+    MUTATING = frozenset({
+        "switch", "focus", "close", "close-apps", "move-window", "launch",
+        "app-open", "move", "click", "scroll", "drag", "key", "key-down",
+        "key-up", "type", "a11y-enable",
+    })
+
+    @classmethod
+    def mutates(cls, verb: str, args) -> bool:
+        """Does this call change the desktop (or the filesystem)?"""
+        if verb == "clipboard":
+            return str(getattr(args, "mode", "")) in ("set", "clear")
+        if verb == "dir":
+            return bool(getattr(args, "create", False))
+        return verb in cls.MUTATING
+
+    def plan(self) -> dict:
+        """The dry-run reply: what would have run, and nothing else."""
+        return {"dry_run": True, "argv": [PROG, *self._argv]}
 
     @classmethod
     def build_parser(cls) -> argparse.ArgumentParser:

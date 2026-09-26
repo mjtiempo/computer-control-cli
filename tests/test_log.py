@@ -124,6 +124,53 @@ class ActionLogTests(unittest.TestCase):
         self.assertEqual(lines[0], "2026-01-01T00:00:00 move ok")
         self.assertIn("focus fail window-not-found", lines[1])
 
+    def test_follow_yields_the_backlog_then_appended_entries(self):
+        log = ActionLog(self.config)
+        log.write("one", ok=True)
+
+        stream = log.follow(count=5, poll=0.01)
+        self.assertEqual(next(stream)["action"], "one")
+
+        log.write("two", ok=True)
+        self.assertEqual(next(stream)["action"], "two")
+
+    def test_follow_honours_since(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        with open(self.path, "w") as handle:
+            handle.write(json.dumps(
+                {"ts": "2026-01-01T00:00:00.000+00:00", "action": "old",
+                 "ok": True}) + "\n")
+            handle.write(json.dumps(
+                {"ts": "2026-01-01T00:00:01.000+00:00", "action": "new",
+                 "ok": True}) + "\n")
+        log = ActionLog(self.config)
+
+        stream = log.follow(count=5, since="2026-01-01T00:00:01.000+00:00",
+                            poll=0.01)
+
+        self.assertEqual(next(stream)["action"], "new")
+
+    def test_follow_recovers_when_the_log_is_truncated(self):
+        log = ActionLog(self.config)
+        log.write("a" * 200, ok=True)
+
+        stream = log.follow(count=1, poll=0.01)
+        self.assertEqual(next(stream)["action"], "a" * 200)
+
+        with open(self.path, "w"):
+            pass
+        log.write("two", ok=True)
+
+        self.assertEqual(next(stream)["action"], "two")
+
+    def test_follow_waits_for_a_log_that_does_not_exist_yet(self):
+        log = ActionLog(self.config)
+
+        stream = log.follow(count=1, poll=0.01)
+        log.write("first", ok=True)
+
+        self.assertEqual(next(stream)["action"], "first")
+
 
 if __name__ == "__main__":
     unittest.main()
