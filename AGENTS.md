@@ -27,9 +27,12 @@ and a machine audit. The user-facing contract is the verb table in
   `FakeInputRunner`, `FakeDiscoverer`). Never mock at a lower seam than
   `Runner` — the cursor model in `FakeInputRunner` is what makes warp
   verification, drag, and the audit's calibration check testable.
-* The live battery is opt-in: `CCC_LIVE=1 python3 -m unittest tests.test_live`.
-  It may move the pointer, open a scratch window and use the clipboard, and it
-  must restore/clean up in `finally`.
+* The live batter is opt-in: `CCC_LIVE=1 python3 -m unittest tests.test_live
+  tests.test_live_cli`. `tests/test_live.py` drives the services;
+  `tests/test_live_cli.py` drives every verb through the CLI as a subprocess
+  and is the one to extend when a verb is added. Both may move the pointer,
+  open scratch windows and use the clipboard, and both restore/clean up in
+  `finally`/`tearDownClass`.
 * `tests/test_skill.py` is a drift gate: every CLI verb and every refusal code
   the package can raise must appear in `skill/computer-control/SKILL.md`.
   A new verb or code without a skill line fails the suite.

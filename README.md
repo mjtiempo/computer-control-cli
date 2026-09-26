@@ -35,7 +35,7 @@ Or install a link into a prefix:
 | --- | --- |
 | Desktop state | `state` `windows` `active` `workspaces` `monitors` `pos` |
 | Screen | `screen [--monitor NAME] [--out DIR] [--no-cursor]` `region X Y W H` `active-screen [--window SPEC]` |
-| System | `system` (cpu, model, memory, swap, disk, network, battery, thermal) · `clipboard get\|set\|clear [--primary]` · `log [N] [--since TS] [--text]` |
+| System | `system` (cpu, model, memory, swap, disk, network, battery, thermal) · `clipboard get\|set\|clear\|types [--primary] [--type MIME] [--file PATH] [--out FILE]` · `log [N] [--since TS] [--text]` |
 | Windows / workspaces | `switch N` `focus SPEC` `close [SPEC]` `close-apps --kind K [--dry-run]` `move-window SPEC N` `wait-window [SPEC] [--gone] [--new] [--exclude A,B] [--title S] [--class S] [--stable N] [--timeout S]` |
 | Apps | `apps` (entries + running processes) `which NAME` `dir PATH [--create]` `app-open NAME [--workspace N] [--cwd DIR] [--dry-run]` `launch [--workspace N] [--no-wait] PROGRAM [ARGS…]` |
 | Pointer | `pos` `move X Y` `click [X Y] [--button L\|R\|M] [--double]` `scroll DIR AMOUNT [X Y]` `drag X1 Y1 X2 Y2 [--button B] [--duration MS]` |
@@ -72,6 +72,20 @@ has no action. Coverage is uneven by nature: GTK/Qt apps expose trees,
 Chromium needs `--force-renderer-accessibility`, and terminals often expose
 nothing — on such a desktop `a11y` is an honest empty list, not a failure.
 
+## Clipboard
+
+Text by default, and raw bytes for any MIME type. Every write is verified by
+reading the selection back; an empty selection is empty data, not a refusal.
+
+```bash
+computer-control clipboard get                            # {"text": …}
+computer-control clipboard set "hello"
+computer-control clipboard types                          # ["text/plain", …]
+computer-control clipboard set --file shot.png --type image/png
+computer-control clipboard get --type image/png --out back.png
+computer-control clipboard clear --primary
+```
+
 ## Architecture
 
 One class per responsibility; services receive their `Session` and `Config`
@@ -100,12 +114,14 @@ whole stack runs against a double.
 ## Testing
 
 ```bash
-python3 -m unittest                          # 282 hermetic checks, no desktop
-CCC_LIVE=1 python3 -m unittest tests.test_live -v   # 12 live checks
+python3 -m unittest                          # 320 hermetic checks, no desktop
+CCC_LIVE=1 python3 -m unittest tests.test_live -v      # 12 service-level live checks
+CCC_LIVE=1 python3 -m unittest tests.test_live_cli -v  # 26 CLI-level live checks
 pyright                                      # static gate
 ```
 
-The live battery moves the pointer and back, captures the screen, round-trips
-the clipboard, types into a scratch terminal it opens and closes, runs the
-audit, and exercises AT-SPI. A missing prerequisite is a SKIP with its
-reason, never a pass.
+The live batteries move the pointer and back, capture the screen, round-trip
+the clipboard (text, primary and PNG), type into a scratch terminal it opens
+and closes, run the audit, exercise AT-SPI, and drive **every verb through the
+CLI as a subprocess**, restoring the cursor, clipboard and workspace
+afterwards. A missing prerequisite is a SKIP with its reason, never a pass.

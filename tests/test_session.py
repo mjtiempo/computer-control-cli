@@ -1,12 +1,14 @@
 """Tests for the session: environment resolution and hyprctl access."""
 
 import json
+import os
+import tempfile
 import unittest
 
 from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.session import ProcessRunner, Session  # pi-lens-ignore: reportMissingImports
 
-from tests.fakes import FakeDiscoverer, FakeHyprland, FakeRunner  # pi-lens-ignore: reportMissingImports
+from tests.fakes import FakeDiscoverer, FakeRunner  # pi-lens-ignore: reportMissingImports
 
 ENV = {"HYPRLAND_INSTANCE_SIGNATURE": "sig_1",
        "WAYLAND_DISPLAY": "wayland-1",
@@ -149,9 +151,23 @@ class SessionTests(unittest.TestCase):
     def test_process_runner_is_the_default(self):
         self.assertIsInstance(ProcessRunner(), ProcessRunner)
 
+    def test_with_env_refuses_a_missing_instance(self):
+        env = {**ENV, "XDG_RUNTIME_DIR": tempfile.mkdtemp()}
+        session = self.make(env=env, discovery=env)
+
+        with self.assertRaises(ControlError) as caught:
+            session.with_env({"HYPRLAND_INSTANCE_SIGNATURE": "nope"})
+
+        self.assertEqual(caught.exception.code, "no-session")
+
     def test_with_env_overrides_and_keeps_the_devices(self):
+        runtime = tempfile.mkdtemp()
+        socket_dir = os.path.join(runtime, "hypr", "sig_2")
+        os.makedirs(socket_dir)
+        open(os.path.join(socket_dir, ".socket.sock"), "w").close()
+        env = {**ENV, "XDG_RUNTIME_DIR": runtime}
         runner = FakeRunner(responses={"hyprctl cursorpos": "1,2"})
-        session = self.make(runner=runner)
+        session = self.make(runner=runner, env=env, discovery=env)
 
         other = session.with_env({"HYPRLAND_INSTANCE_SIGNATURE": "sig_2"})
         other.run(["hyprctl", "cursorpos"])

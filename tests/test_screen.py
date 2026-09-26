@@ -175,8 +175,8 @@ class _TwoCommandRunner:
         return self.other.run(argv, env=env, timeout=timeout, binary=binary,
                               input=input)
 
-    def spawn(self, argv, env=None, input=None) -> int:
-        return self.other.spawn(argv, env=env, input=input)
+    def spawn(self, argv, env=None, input=None, binary: bool = False) -> int:
+        return self.other.spawn(argv, env=env, input=input, binary=binary)
 
 
 def make_active_screen(hyprland, responses):

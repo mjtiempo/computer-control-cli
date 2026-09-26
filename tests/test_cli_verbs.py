@@ -217,8 +217,8 @@ class CliInputTests(CliFixture):
         self.run_json("key-down", "ctrl+c")
         self.run_json("key-up", "ctrl+c")
 
-        self.assertIn(["wtype", "-M", "ctrl", "-P", "c"], self.runner.calls)
-        self.assertIn(["wtype", "-m", "ctrl", "-p", "c"], self.runner.calls)
+        self.assertIn(["ydotool", "key", "29:1", "46:1"], self.runner.calls)
+        self.assertIn(["ydotool", "key", "29:0", "46:0"], self.runner.calls)
 
     def test_drag(self):
         result = self.run_json("drag", "100", "100", "300", "200",
@@ -264,6 +264,49 @@ class CliInputTests(CliFixture):
 
         self.assertTrue(result["primary"])
         self.assertEqual(result["text"], "primary text")
+
+    def test_clipboard_types(self):
+        self.runner.responses["wl-paste --list-types"] = \
+            "text/plain\nimage/png"
+
+        self.assertEqual(self.run_json("clipboard", "types"),
+                         ["text/plain", "image/png"])
+
+    def test_clipboard_file_round_trip(self):
+        payload = b"\x89PNG\r\n\x1a\nfake-image"
+        source = os.path.join(self._tmp.name, "in.png")
+        with open(source, "wb") as handle:
+            handle.write(payload)
+
+        result = self.run_json("clipboard", "set", "--file", source,
+                               "--type", "image/png")
+        self.assertEqual(result["bytes"], len(payload))
+        out = os.path.join(self._tmp.name, "out.png")
+        got = self.run_json("clipboard", "get", "--type", "image/png",
+                            "--out", out)
+
+        self.assertEqual(got["bytes"], len(payload))
+        with open(out, "rb") as handle:
+            self.assertEqual(handle.read(), payload)
+
+    def test_clipboard_get_type_writes_raw_bytes(self):
+        self.runner.clipboard_data = b"\x89PNG"
+        self.runner.clipboard_mime = "image/png"
+        stdout = BinaryStdout()
+
+        with mock.patch("sys.stdout", stdout):
+            code = Cli(["clipboard", "get", "--type", "image/png"],
+                       session=self.session, config=self.config).run()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.buffer.getvalue(), b"\x89PNG")
+
+    def test_clipboard_missing_file_refuses(self):
+        code, _, stderr = self.run_cli("clipboard", "set", "--file",
+                                       "/definitely/nope.png")
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[no-file]", stderr)
 
     def test_click_el_px_fallback(self):
         self.runner.responses[f"python3 {A11y.bridge_path()} click 0"] = \

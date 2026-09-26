@@ -266,20 +266,20 @@ class KeyboardTests(unittest.TestCase):
 
 
 class KeyboardHoldTests(unittest.TestCase):
-    def test_key_down_uses_wtype_for_plain_keys(self):
+    def test_key_down_uses_ydotool_state(self):
         keyboard_input, runner = make_input()
 
         result = keyboard_input.key_down("ctrl+c")
 
         self.assertEqual(result.details["state"], "down")
-        self.assertIn(["wtype", "-M", "ctrl", "-P", "c"], runner.calls)
+        self.assertIn(["ydotool", "key", "29:1", "46:1"], runner.calls)
 
-    def test_key_up_uses_wtype_for_plain_keys(self):
+    def test_key_up_uses_ydotool_state(self):
         keyboard_input, runner = make_input()
 
         keyboard_input.key_up("ctrl+c")
 
-        self.assertIn(["wtype", "-m", "ctrl", "-p", "c"], runner.calls)
+        self.assertIn(["ydotool", "key", "29:0", "46:0"], runner.calls)
 
     def test_key_down_super_uses_ydotool(self):
         keyboard_input, runner = make_input()

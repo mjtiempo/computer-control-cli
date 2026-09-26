@@ -27,7 +27,7 @@ stderr and exits 1 (2 for a usage error). Coordinates are **logical pixels**,
 | --- | --- |
 | Snapshot | `state` `windows` `active` `workspaces` `monitors` `pos` |
 | Screen | `screen [--monitor NAME] [--out DIR] [--no-cursor]` `region X Y W H` `active-screen [--window SPEC]` |
-| System | `system` `clipboard get\|set\|clear [--primary]` `log [N] [--since TS] [--text]` |
+| System | `system` `clipboard get\|set\|clear\|types [--primary] [--type MIME] [--file PATH] [--out FILE]` `log [N] [--since TS] [--text]` |
 | Windows | `switch N` `focus SPEC` `close [SPEC]` `close-apps --kind terminal\|browser\|other\|all [--dry-run]` `move-window SPEC N` `wait-window [SPEC] [--gone] [--new] [--exclude A,B] [--title S] [--class S] [--stable N] [--timeout S]` |
 | Apps | `apps` `which NAME` `dir PATH [--create]` `app-open NAME [--workspace N] [--cwd DIR] [--dry-run]` `launch [--workspace N] [--no-wait] PROGRAM [ARGS…]` |
 | Pointer | `pos` `move X Y` `click [X Y] [--button L\|R\|M] [--double]` `scroll DIR AMOUNT [X Y]` `drag X1 Y1 X2 Y2 [--button B] [--duration MS]` |
@@ -72,6 +72,7 @@ Branch on the code, never the prose. Every code the CLI can raise:
 | `app-unknown` `app-ambiguous` `app-open-failed` | the app entry is unclear or opened no window |
 | `cwd-missing` `cwd-unsupported` | the directory does not exist, or the app cannot start in one |
 | `not-a-dir` `create-failed` `create-not-verified` | `dir` found a file, could not create, or cannot verify |
+| `no-file` | a clipboard input/output file could not be read or written |
 | `atspi` | the AT-SPI bridge failed (a walk, or an action) |
 | `stale-tree` | the dumped element is gone: re-dump with `a11y` and re-pick |
 | `ambiguous-element` | several nodes share the identity: re-pick or click by pixels |

@@ -11,7 +11,7 @@ import os
 import shutil
 import socket
 import time
-from typing import Any
+from typing import Any, Union
 
 from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.session import Session  # pi-lens-ignore: reportMissingImports
@@ -25,10 +25,12 @@ class SystemInfo:
     """This machine: cpu, memory, uptime, disks — and the clipboard."""
 
     def __init__(self, session: Session, proc: str = "/proc",
-                 sys: str = "/sys"):
+                 sys: str = "/sys",
+                 verify_seconds: float = CLIPBOARD_VERIFY_SECONDS):
         self.session = session
         self.proc = proc
         self.sys = sys
+        self.verify_seconds = verify_seconds
 
     # ---------------------------------------------------------------- reads
     def sysinfo(self) -> dict[str, Any]:
@@ -189,33 +191,76 @@ class SystemInfo:
             return 0.0
 
     # ------------------------------------------------------------ clipboard
-    def clipboard_get(self, primary: bool = False) -> str:
-        argv = ["wl-paste"] + (["--primary"] if primary else []) \
-            + ["--no-newline"]
+    def clipboard_types(self, primary: bool = False) -> list[str]:
+        """The MIME types the current selection offers (empty when none)."""
+        argv = (["wl-paste"] + (["--primary"] if primary else [])
+                + ["--list-types"])
         proc = self.session.run(argv, timeout=CLIPBOARD_TIMEOUT)
         if proc.returncode != 0:
+            if self._empty_selection(proc.stderr or ""):
+                return []
+            raise ControlError(
+                "clipboard",
+                f"wl-paste --list-types failed: "
+                f"{(proc.stderr or '').strip()}")
+        return [line.strip() for line in (proc.stdout or "").splitlines()
+                if line.strip()]
+
+    def clipboard_get(self, primary: bool = False, mime: str = "",
+                      binary: bool = False) -> Union[str, bytes]:
+        """Read the selection: text by default, raw bytes for a ``mime``.
+
+        An empty selection is empty data, not a failure: ``wl-paste`` exits 1
+        with "Nothing is copied", which is the clipboard saying it holds
+        nothing.
+        """
+        argv = ["wl-paste"] + (["--primary"] if primary else [])
+        if mime:
+            argv += ["--type", str(mime)]
+        elif not binary:
+            argv += ["--no-newline"]
+        proc = self.session.run(argv, timeout=CLIPBOARD_TIMEOUT,
+                                binary=binary)
+        if proc.returncode != 0:
+            if self._empty_selection(proc.stderr or ""):
+                return b"" if binary else ""
             raise ControlError(
                 "clipboard", f"wl-paste failed: {(proc.stderr or '').strip()}")
         return proc.stdout
 
-    def clipboard_set(self, text: str, primary: bool = False) -> None:
-        """Put ``text`` on a selection and wait until it is really there.
+    @staticmethod
+    def _empty_selection(stderr: str) -> bool:
+        return str(stderr).lower().strip().startswith("nothing is copied")
 
-        ``wl-copy`` forks and keeps serving the selection, so the write is
-        not done when the spawn returns: the selection is read back until it
-        holds the text, and a write that never takes is a refusal. An empty
-        string clears the selection rather than copying nothing (``wl-copy``
-        refuses empty input, which made restoring an empty clipboard fail).
+    def clipboard_set(self, data: Union[str, bytes], primary: bool = False,
+                      mime: str = "") -> None:
+        """Put text or bytes on a selection, and wait until it is really there.
+
+        ``wl-copy`` forks and keeps serving the selection, so the write is not
+        done when the spawn returns: the selection is read back until it holds
+        the data, and a write that never takes is a refusal. Bytes are sent
+        raw (with ``--type``) so images survive; an empty string clears the
+        selection rather than copying nothing.
         """
-        if text == "":
+        if data == "" or data == b"":
             self.clipboard_clear(primary)
             return
-        argv = ["wl-copy"] + (["--primary"] if primary else [])
-        self.session.spawn(argv, input=text)
-        deadline = time.time() + CLIPBOARD_VERIFY_SECONDS
+        binary = isinstance(data, bytes)
+        argv = (["wl-copy"] + (["--primary"] if primary else [])
+                + (["--type", str(mime)] if mime else []))
+        self.session.spawn(argv, input=data, binary=binary)
+        expected = data if binary else str(data).encode()
+        deadline = time.time() + max(0.0, float(self.verify_seconds))
         while time.time() < deadline:
             try:
-                if self.clipboard_get(primary=primary) == text:
+                if mime:
+                    got: Union[str, bytes] = self.clipboard_get(
+                        primary=primary, mime=mime, binary=True)
+                else:
+                    got = self.clipboard_get(primary=primary)
+                if isinstance(got, str):
+                    got = got.encode()
+                if got == expected:
                     return
             except ControlError:
                 pass
@@ -223,7 +268,7 @@ class SystemInfo:
         raise ControlError(
             "clipboard",
             "wl-copy did not take the selection within "
-            f"{CLIPBOARD_VERIFY_SECONDS:g}s")
+            f"{self.verify_seconds:g}s")
 
     def clipboard_clear(self, primary: bool = False) -> None:
         argv = ["wl-copy"] + (["--primary"] if primary else []) + ["--clear"]

@@ -14,7 +14,7 @@ import json
 import os
 import stat
 import subprocess
-from typing import Any, Mapping, Optional, Protocol
+from typing import Any, Mapping, Optional, Protocol, Union
 
 from computer_control_cli.coerce import Coerce  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
@@ -29,10 +29,12 @@ class Runner(Protocol):
 
     def run(self, argv, env: Optional[Mapping[str, str]] = None,
             timeout: float = 15, binary: bool = False,
-            input: Optional[str] = None) -> subprocess.CompletedProcess: ...
+            input: Optional[Union[str, bytes]] = None
+            ) -> subprocess.CompletedProcess: ...
 
     def spawn(self, argv, env: Optional[Mapping[str, str]] = None,
-              input: Optional[str] = None) -> int: ...
+              input: Optional[Union[str, bytes]] = None,
+              binary: bool = False) -> int: ...
 
 
 class Discoverer(Protocol):
@@ -46,13 +48,24 @@ class ProcessRunner:
 
     def run(self, argv, env: Optional[Mapping[str, str]] = None,
             timeout: float = 15, binary: bool = False,
-            input: Optional[str] = None) -> subprocess.CompletedProcess:
+            input: Optional[Union[str, bytes]] = None
+            ) -> subprocess.CompletedProcess:
+        """Run a command and capture it.
+
+        Text mode decodes with ``errors="replace"``: a selection that holds
+        image bytes is then replacement characters, never a UnicodeDecodeError
+        traceback out of a read.
+        """
+        common = {"capture_output": True, "input": input, "timeout": timeout}
+        if binary:
+            return subprocess.run(list(argv), env=dict(env) if env else None,
+                                  text=False, **common)
         return subprocess.run(list(argv), env=dict(env) if env else None,
-                              capture_output=True, text=not binary,
-                              input=input, timeout=timeout)
+                              text=True, errors="replace", **common)
 
     def spawn(self, argv, env: Optional[Mapping[str, str]] = None,
-              input: Optional[str] = None) -> int:
+              input: Optional[Union[str, bytes]] = None,
+              binary: bool = False) -> int:
         """Start a command that outlives the call (a clipboard holder) and
         return its pid. Pipes are /dev/null: a forked child must not hold a
         capture pipe open, or waiting for it would hang.
@@ -61,7 +74,7 @@ class ProcessRunner:
             list(argv), env=dict(env) if env else None,
             stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            text=True, start_new_session=True)
+            text=not binary, start_new_session=True)
         if input is not None and proc.stdin is not None:
             try:
                 proc.stdin.write(input)
@@ -194,9 +207,19 @@ class Session:
 
         The same runner and discoverer are kept, so a caller can target an
         instance or display without losing the process boundary it injected.
+        An instance with no live socket refuses here, as `no-session`: a
+        target that is not there is a missing session, not a hyprctl failure.
         """
         base = dict(self.resolved_env() or {})
         base.update(updates)
+        signature = str(base.get("HYPRLAND_INSTANCE_SIGNATURE") or "")
+        runtime = str(base.get("XDG_RUNTIME_DIR") or "")
+        if signature and runtime and not os.path.exists(
+                os.path.join(runtime, "hypr", signature, ".socket.sock")):
+            raise ControlError(
+                "no-session",
+                f"no live Hyprland socket for instance {signature!r} under "
+                f"{runtime}/hypr")
         return Session(env=base, runner=self._runner,
                        discoverer=self._discoverer)
 
@@ -223,17 +246,20 @@ class Session:
         return f'"{escaped}"'
 
     # ---------------------------------------------------------------- run
-    def spawn(self, argv, input: Optional[str] = None) -> int:
+    def spawn(self, argv, input: Optional[Union[str, bytes]] = None,
+              binary: bool = False) -> int:
         """Start a command that outlives this call, with the session env."""
         try:
-            return self._runner.spawn(list(argv), env=self.env(), input=input)
+            return self._runner.spawn(list(argv), env=self.env(), input=input,
+                                      binary=binary)
         except FileNotFoundError:
             raise ControlError("not-found", f"{argv[0]}: not found on PATH")
         except OSError as error:
             raise ControlError("subprocess-failed", f"{argv[0]}: {error}")
 
     def run(self, argv, timeout: float = 15, binary: bool = False,
-            input: Optional[str] = None) -> subprocess.CompletedProcess:
+            input: Optional[Union[str, bytes]] = None
+            ) -> subprocess.CompletedProcess:
         """Run a command in the session environment, translating the ways a
         child can fail to answer into coded refusals."""
         try:

@@ -13,8 +13,9 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import sys
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from computer_control_cli import __version__
 from computer_control_cli.a11y import A11y  # pi-lens-ignore: reportMissingImports
@@ -180,10 +181,18 @@ class ParserBuilder:
         drag.add_argument("y2", type=int)
         drag.add_argument("--button", default="L")
         drag.add_argument("--duration", type=int, default=300)
-        clipboard = self.verb("clipboard", "read, write or clear the clipboard")
-        clipboard.add_argument("mode", choices=("get", "set", "clear"))
+        clipboard = self.verb("clipboard",
+                              "read, write, clear, or list the clipboard")
+        clipboard.add_argument("mode",
+                               choices=("get", "set", "clear", "types"))
         clipboard.add_argument("text", nargs="?")
         clipboard.add_argument("--primary", action="store_true")
+        clipboard.add_argument("--type", dest="mime", default="",
+                               help="MIME type (images, HTML, …)")
+        clipboard.add_argument("--file", dest="file", default="",
+                               help="send these bytes (set)")
+        clipboard.add_argument("--out", dest="out", default="",
+                               help="save the bytes here (get)")
 
 
 class Cli:
@@ -369,16 +378,57 @@ class Cli:
 
     def cmd_clipboard(self, args) -> Any:
         primary = bool(getattr(args, "primary", False))
+        if args.mode == "types":
+            return self.system.clipboard_types(primary)
         if args.mode == "get":
-            return {"text": self.system.clipboard_get(primary),
-                    "primary": primary}
+            if args.mime:
+                data: Union[str, bytes] = self.system.clipboard_get(
+                    primary, mime=args.mime, binary=True)
+                if isinstance(data, str):
+                    data = data.encode()
+                if args.out:
+                    return self.save_bytes(data, args.out)
+                return data          # raw bytes to stdout
+            text = self.system.clipboard_get(primary)
+            if args.out:
+                return self.save_bytes(str(text).encode(), args.out)
+            return {"text": text, "primary": primary}
         if args.mode == "clear":
             self.system.clipboard_clear(primary)
             return {"ok": True, "cleared": True, "primary": primary}
+        if args.file:
+            data = self.read_file(args.file)
+            self.system.clipboard_set(data, primary, mime=args.mime)
+            return {"ok": True, "bytes": len(data), "primary": primary,
+                    "type": args.mime or None}
         if args.text is None:
-            raise ControlError("bad-args", "clipboard set: TEXT is required")
-        self.system.clipboard_set(args.text, primary)
-        return {"ok": True, "chars": len(args.text), "primary": primary}
+            raise ControlError("bad-args",
+                               "clipboard set: TEXT or --file is required")
+        if args.mime:
+            self.system.clipboard_set(args.text.encode(), primary,
+                                      mime=args.mime)
+        else:
+            self.system.clipboard_set(args.text, primary)
+        return {"ok": True, "chars": len(args.text), "primary": primary,
+                "type": args.mime or None}
+
+    @staticmethod
+    def read_file(path: str) -> bytes:
+        try:
+            with open(os.path.expanduser(path), "rb") as handle:
+                return handle.read()
+        except OSError as error:
+            raise ControlError("no-file", f"cannot read {path!r}: {error}")
+
+    @staticmethod
+    def save_bytes(data: bytes, path: str) -> dict:
+        target = os.path.expanduser(path)
+        try:
+            with open(target, "wb") as handle:
+                handle.write(data)
+        except OSError as error:
+            raise ControlError("no-file", f"cannot write {path!r}: {error}")
+        return {"path": target, "bytes": len(data)}
 
     def cmd_sequence(self, args) -> Any:
         try:
@@ -429,7 +479,13 @@ class Cli:
         except SystemExit as exit_error:  # --help, --version, bad usage
             return int(exit_error.code or 0)
         if getattr(args, "instance", "") or getattr(args, "display", ""):
-            self.build_services(args.instance, args.display)
+            try:
+                self.build_services(args.instance, args.display)
+            except ControlError as error:
+                verb = str(getattr(args, "verb", "") or "target")
+                self.log.write(verb, ok=False, args=list(self._argv),
+                               code=error.code, detail=error.message)
+                return self.report(error)
         verb = str(getattr(args, "verb", "") or "")
         handler = getattr(self, "cmd_" + verb.replace("-", "_"), None) \
             if verb else None

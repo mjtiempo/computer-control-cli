@@ -170,6 +170,65 @@ class SystemInfoTests(unittest.TestCase):
         self.assertEqual(self.runner.calls[-1],
                          ["wl-copy", "--primary", "--clear"])
 
+    def test_clipboard_types(self):
+        self.runner.responses["wl-paste --list-types"] = \
+            "text/plain\nimage/png\ntext/html\n"
+
+        self.assertEqual(self.system.clipboard_types(),
+                         ["text/plain", "image/png", "text/html"])
+
+    def test_clipboard_types_primary(self):
+        self.runner.responses["wl-paste --primary --list-types"] = "text/plain\n"
+
+        self.assertEqual(self.system.clipboard_types(primary=True),
+                         ["text/plain"])
+
+    def test_clipboard_types_empty_reply(self):
+        self.assertEqual(self.system.clipboard_types(), ["text/plain"])
+        self.runner.mime_types = []
+        self.assertEqual(self.system.clipboard_types(), [])
+
+    def test_clipboard_get_by_mime_returns_bytes(self):
+        self.runner.clipboard_data = b"\x89PNGdata"
+        self.runner.clipboard_mime = "image/png"
+
+        data = self.system.clipboard_get(mime="image/png", binary=True)
+
+        self.assertEqual(data, b"\x89PNGdata")
+        self.assertEqual(self.runner.calls[-1],
+                         ["wl-paste", "--type", "image/png"])
+
+    def test_clipboard_set_bytes_with_mime_round_trips(self):
+        payload = b"\x89PNGdata"
+
+        self.system.clipboard_set(payload, mime="image/png")
+
+        self.assertEqual(self.runner.spawned[-1][0],
+                         ["wl-copy", "--type", "image/png"])
+        self.assertEqual(self.runner.spawned[-1][1], payload)
+        self.assertEqual(
+            self.system.clipboard_get(mime="image/png", binary=True), payload)
+
+    def test_clipboard_set_mime_that_never_takes_refuses(self):
+        runner = FakeRunner()
+        runner.responses["wl-paste --type image/png"] = b"other"
+        system = SystemInfo(Session(env=ENV, runner=runner,
+                                    discoverer=FakeDiscoverer(ENV)),
+                            proc=self.proc, sys=self.sys, verify_seconds=0.05)
+
+        with self.assertRaises(ControlError) as caught:
+            system.clipboard_set(b"\x89PNG", mime="image/png")
+
+        self.assertEqual(caught.exception.code, "clipboard")
+
+    def test_empty_selection_is_empty_not_a_refusal(self):
+        for key in ("wl-paste --no-newline", "wl-paste --list-types"):
+            self.runner.returncodes[key] = 1
+            self.runner.stderrs[key] = "Nothing is copied\n"
+
+        self.assertEqual(self.system.clipboard_get(), "")
+        self.assertEqual(self.system.clipboard_types(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

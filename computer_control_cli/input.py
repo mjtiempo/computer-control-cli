@@ -266,27 +266,12 @@ class Keyboard:
                                    f"{(proc.stderr or '').strip()}")
 
     def key_state(self, combo: Combo, down: bool) -> None:
-        """Press (``down``) or release one chord's keys, without a full chord.
+        """Press (``down``) or release one chord's keys and LEAVE them so.
 
-        A plain ctrl/alt/shift combo goes through wtype's own press/release
-        ops; a super chord (which wtype cannot hold) goes through ydotool's
-        key-state events.
+        Always ydotool: its virtual keyboard's state persists across calls,
+        while wtype releases everything it pressed when the process exits —
+        a wtype "hold" would not outlive the call that made it.
         """
-        holdable = not any(mod in ("super", "win", "mod")
-                           for mod in combo.mods)
-        keysym = KeyMap.wtype_name(combo.key) if holdable else None
-        if keysym:
-            flags = (["-M"] if down else ["-m"])
-            argv = ["wtype"]
-            for mod in combo.mods:
-                argv += flags + [mod]
-            argv += (["-P"] if down else ["-p"]) + [keysym]
-            proc = self.session.run(argv)
-            if proc.returncode != 0:
-                raise ControlError("type",
-                                   f"wtype failed: "
-                                   f"{(proc.stderr or '').strip()}")
-            return
         sequence = [f"{code}:{1 if down else 0}"
                     for code in KeyMap.codes(combo)]
         proc = self.session.run(["ydotool", "key", *sequence])

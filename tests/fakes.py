@@ -21,17 +21,21 @@ class FakeRunner:
                  returncodes: Optional[dict] = None):
         self.responses = dict(responses or {})
         self.returncodes = dict(returncodes or {})
+        self.stderrs: dict[str, str] = {}
         self.calls: list[list[str]] = []
         self.environments: list[dict] = []
         self.binary_flags: list[bool] = []
         self.inputs: list[Optional[str]] = []
-        self.spawned: list[tuple[list[str], Optional[str]]] = []
+        self.spawned: list[tuple[list[str], Optional[object]]] = []
         self.timeouts: set[str] = set()
         self.missing: set[str] = set()
         self.clipboard = ""
+        self.clipboard_data: bytes = b""
+        self.clipboard_mime: str = ""
+        self.mime_types: list[str] = ["text/plain"]
 
     def run(self, argv, env=None, timeout: float = 15, binary: bool = False,
-            input: Optional[str] = None):
+            input=None):
         key = " ".join(argv)
         self.calls.append(list(argv))
         self.environments.append(dict(env or {}))
@@ -41,26 +45,52 @@ class FakeRunner:
             raise FileNotFoundError(argv[0])
         if key in self.timeouts:
             raise subprocess.TimeoutExpired(argv, timeout)
-        if key in ("wl-paste --no-newline", "wl-paste --primary --no-newline"):
-            stdout = (self.responses[key] if key in self.responses
-                      else self.clipboard)
-            return subprocess.CompletedProcess(
-                argv, self.returncodes.get(key, 0), stdout=stdout, stderr="")
         if key in self.responses:
             return subprocess.CompletedProcess(
                 argv, self.returncodes.get(key, 0),
-                stdout=self.responses.get(key, ""), stderr="")
+                stdout=self.responses[key],
+                stderr=self.stderrs.get(key, ""))
+        if key in ("wl-paste --no-newline", "wl-paste --primary --no-newline"):
+            return subprocess.CompletedProcess(
+                argv, self.returncodes.get(key, 0),
+                stdout=self.clipboard, stderr=self.stderrs.get(key, ""))
+        if key in ("wl-paste --list-types", "wl-paste --primary --list-types"):
+            return subprocess.CompletedProcess(
+                argv, self.returncodes.get(key, 0),
+                stdout="\n".join(self.mime_types),
+                stderr=self.stderrs.get(key, ""))
+        if argv[:1] == ["wl-paste"] and "--type" in argv:
+            mime = argv[argv.index("--type") + 1]
+            data = (self.clipboard_data if mime == self.clipboard_mime
+                    else b"")
+            return subprocess.CompletedProcess(
+                argv, self.returncodes.get(key, 0), stdout=data,
+                stderr=self.stderrs.get(key, ""))
         return subprocess.CompletedProcess(
-            argv, self.returncodes.get(key, 0), stdout="", stderr="")
+            argv, self.returncodes.get(key, 0), stdout="",
+            stderr=self.stderrs.get(key, ""))
 
-    def spawn(self, argv, env=None, input: Optional[str] = None) -> int:
+    def spawn(self, argv, env=None, input=None, binary: bool = False) -> int:
         key = " ".join(argv)
         self.calls.append(list(argv))
         self.spawned.append((list(argv), input))
         if key in self.missing:
             raise FileNotFoundError(argv[0])
         if argv[:1] == ["wl-copy"]:
-            self.clipboard = input or ""
+            if "--clear" in argv:
+                self.clipboard = ""
+                self.clipboard_data = b""
+                self.clipboard_mime = ""
+            elif "--type" in argv:
+                self.clipboard_mime = argv[argv.index("--type") + 1]
+                self.clipboard_data = (input if isinstance(input, bytes)
+                                       else (input or "").encode())
+                self.clipboard = self.clipboard_data.decode(errors="replace")
+            else:
+                self.clipboard = (input if isinstance(input, str)
+                                  else (input or b"").decode(errors="replace"))
+                self.clipboard_data = self.clipboard.encode()
+                self.clipboard_mime = "text/plain"
         return 4242
 
 
@@ -102,7 +132,7 @@ class FakeHyprland:
         self.calls: list[list[str]] = []
 
     # ------------------------------------------------------------- runner
-    def spawn(self, argv, env=None, input: Optional[str] = None) -> int:
+    def spawn(self, argv, env=None, input=None, binary: bool = False) -> int:
         self.calls.append(list(argv))
         return 4242
 
@@ -201,8 +231,11 @@ class FakeInputRunner:
         self.stderrs: dict[str, str] = {}
         self.environments: list[dict] = []
         self.inputs: list[Optional[str]] = []
-        self.spawned: list[tuple[list[str], Optional[str]]] = []
+        self.spawned: list[tuple[list[str], Optional[object]]] = []
         self.clipboard = ""
+        self.clipboard_data: bytes = b""
+        self.clipboard_mime: str = ""
+        self.mime_types: list[str] = ["text/plain"]
 
     def scale(self) -> tuple[float, float]:
         anchor = self.hypr.monitors[0]
@@ -235,6 +268,16 @@ class FakeInputRunner:
             return subprocess.CompletedProcess(argv, 0,
                                                stdout=self.clipboard,
                                                stderr="")
+        if key in ("wl-paste --list-types", "wl-paste --primary --list-types"):
+            return subprocess.CompletedProcess(argv, 0,
+                                               stdout="\n".join(self.mime_types),
+                                               stderr="")
+        if argv[:1] == ["wl-paste"] and "--type" in argv:
+            mime = argv[argv.index("--type") + 1]
+            data = (self.clipboard_data if mime == self.clipboard_mime
+                    else b"")
+            return subprocess.CompletedProcess(argv, 0, stdout=data,
+                                               stderr="")
         if argv[0] == "hyprctl":
             if argv[1:2] == ["cursorpos"]:
                 return subprocess.CompletedProcess(argv, 0,
@@ -256,10 +299,23 @@ class FakeInputRunner:
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(argv, 1, stdout="", stderr="unknown")
 
-    def spawn(self, argv, env=None, input: Optional[str] = None) -> int:
+    def spawn(self, argv, env=None, input=None, binary: bool = False) -> int:
         self.calls.append(list(argv))
         self.inputs.append(input)
         self.spawned.append((list(argv), input))
         if argv[:1] == ["wl-copy"]:
-            self.clipboard = input or ""
+            if "--clear" in argv:
+                self.clipboard = ""
+                self.clipboard_data = b""
+                self.clipboard_mime = ""
+            elif "--type" in argv:
+                self.clipboard_mime = argv[argv.index("--type") + 1]
+                self.clipboard_data = (input if isinstance(input, bytes)
+                                       else (input or "").encode())
+                self.clipboard = self.clipboard_data.decode(errors="replace")
+            else:
+                self.clipboard = (input if isinstance(input, str)
+                                  else (input or b"").decode(errors="replace"))
+                self.clipboard_data = self.clipboard.encode()
+                self.clipboard_mime = "text/plain"
         return 4242
