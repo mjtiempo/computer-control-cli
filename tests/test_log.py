@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from computer_control_cli.config import Config  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.log import ActionLog  # pi-lens-ignore: reportMissingImports
 
 
@@ -170,6 +171,89 @@ class ActionLogTests(unittest.TestCase):
         log.write("first", ok=True)
 
         self.assertEqual(next(stream)["action"], "first")
+
+    def test_follow_finishes_an_entry_that_was_half_written(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        half = ('{"ts": "2026-01-01T00:00:02.000+00:00", '
+                '"action": "broken", "ok":')
+        with open(self.path, "w") as handle:
+            handle.write(json.dumps(
+                {"ts": "2026-01-01T00:00:01.000+00:00", "action": "one",
+                 "ok": True}) + "\n")
+            handle.write(half)          # no newline: the writer is mid-line
+        log = ActionLog(self.config)
+
+        stream = log.follow(count=5, poll=0.01)
+        self.assertEqual(next(stream)["action"], "one")
+
+        with open(self.path, "a") as handle:
+            handle.write(" true}\n")            # the writer finishes the line
+            handle.write(json.dumps(
+                {"ts": "2026-01-01T00:00:03.000+00:00", "action": "two",
+                 "ok": True}) + "\n")
+
+        self.assertEqual(next(stream)["action"], "broken")
+
+    def test_follow_filters_since_on_appended_entries(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        with open(self.path, "w") as handle:
+            handle.write(json.dumps(
+                {"ts": "2099-01-01T00:00:00.000+00:00", "action": "seed",
+                 "ok": True}) + "\n")
+        log = ActionLog(self.config)
+
+        stream = log.follow(count=5, since="2099-01-01T00:00:00.000+00:00",
+                            poll=0.01)
+        self.assertEqual(next(stream)["action"], "seed")
+
+        with open(self.path, "a") as handle:
+            handle.write(json.dumps(
+                {"ts": "2026-01-01T00:00:01.000+00:00", "action": "old",
+                 "ok": True}) + "\n")
+            handle.write(json.dumps(
+                {"ts": "2099-01-01T00:00:01.000+00:00", "action": "new",
+                 "ok": True}) + "\n")
+
+        self.assertEqual(next(stream)["action"], "new")
+
+    def test_follow_reads_a_replaced_log_from_the_top(self):
+        log = ActionLog(self.config)
+        log.write("a" * 200, ok=True)
+
+        stream = log.follow(count=1, poll=0.01)
+        self.assertEqual(next(stream)["action"], "a" * 200)
+
+        rotated = self.path + ".1"
+        with open(rotated, "w") as handle:            # a bigger replacement
+            handle.write(json.dumps(
+                {"ts": "2026-01-01T00:00:01.000+00:00", "action": "rotated",
+                 "ok": True, "pad": "r" * 300}) + "\n")
+        os.replace(rotated, self.path)
+
+        with open(self.path, "a") as handle:
+            handle.write(json.dumps(
+                {"ts": "2026-01-01T00:00:02.000+00:00", "action": "after",
+                 "ok": True}) + "\n")
+
+        self.assertEqual(next(stream)["action"], "rotated")
+
+    def test_follow_refuses_a_log_it_cannot_read(self):
+        log = ActionLog(Config(env={"CCC_LOG": self._tmp.name}))
+
+        with self.assertRaises(ControlError) as caught:
+            next(log.follow(count=1, poll=0.01))
+
+        self.assertEqual(caught.exception.code, "no-file")
+
+    def test_render_escapes_control_characters(self):
+        lines = ActionLog.render([{
+            "ts": "2026-01-01T00:00:00", "action": "focus", "ok": False,
+            "code": "ambiguous-window",
+            "detail": "\x1b]0;pwned\x07\x1b[2J"}])
+
+        self.assertNotIn("\x1b", lines[0])
+        self.assertNotIn("\x07", lines[0])
+        self.assertIn("\\x1b", lines[0])
 
 
 if __name__ == "__main__":

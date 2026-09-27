@@ -82,14 +82,16 @@ Branch on the code, never the prose. Every code the CLI can raise:
 
 - Batch independent calls; let a refusal stop the plan (a `sequence` stops at
   the first refusal).
-- Global flags: `--quiet` (stdout only), `--dry-run` (mutating verbs report
-  what they would do; `close-apps`/`app-open` give their own richer plan),
-  `--timeout SEC` (default window-wait timeout; a verb's own wins).
+- Global flags: `--quiet` (stdout only; a capture then needs `--out`),
+  `--dry-run` (mutating verbs report what they would do; `close-apps`/
+  `app-open` give their own richer plan), `--timeout SEC` (default window-wait
+  timeout; a verb's own wins). They go **before the VERB** — a flag the verb
+  does not have after it is `ERR[bad-args]`, and a `sequence` step takes them
+  for that step alone.
 - Pointer and keyboard verbs take `--clearmodifiers` (release every modifier
   first; ydotool-only — wtype cannot hold).
 - `log --follow` tails the action log, one entry per line, until interrupted.
-- `--dry-run` where it exists (`close-apps`, `app-open`) before a destructive
-  sweep.
+- Preview a destructive sweep with the global `--dry-run` before it runs.
 - `ERR[focus-not-verified]` / `ERR[close-not-verified]` /
   `ERR[switch-not-verified]` / `ERR[move-not-verified]` mean the compositor
   answered ok and did not apply: re-read state, do not retry blindly.

@@ -37,7 +37,7 @@ Or install a link into a prefix:
 | Screen | `screen [--monitor NAME] [--out DIR] [--no-cursor]` `region X Y W H` `active-screen [--window SPEC]` |
 | System | `system` (cpu, model, memory, swap, disk, network, battery, thermal) · `clipboard get\|set\|clear\|types [--primary] [--type MIME] [--file PATH] [--out FILE]` · `log [N] [--since TS] [--text] [--follow]` |
 | Windows / workspaces | `switch N` `focus SPEC` `close [SPEC]` `close-apps --kind K [--dry-run]` `move-window SPEC N` `wait-window [SPEC] [--gone] [--new] [--exclude A,B] [--title S] [--class S] [--stable N] [--timeout S]` |
-| Apps | `apps` (entries + running processes) `which NAME` `dir PATH [--create]` `app-open NAME [--workspace N] [--cwd DIR] [--dry-run]` `launch [--workspace N] [--no-wait] PROGRAM [ARGS…]` |
+| Apps | `apps` (entries + running processes) `which NAME` `dir PATH [--create]` `app-open NAME [--workspace N] [--cwd DIR] [--dry-run]` `launch [--workspace N] [--no-wait] [--timeout S] PROGRAM [ARGS…]` |
 | Pointer | `pos` `move X Y` `click [X Y] [--button L\|R\|M] [--double]` `scroll DIR AMOUNT [X Y]` `drag X1 Y1 X2 Y2 [--button B] [--duration MS]` |
 | Keyboard | `key COMBO [--ydotool]` `key-down COMBO` `key-up COMBO` `type TEXT [--delay MS]` |
 | AT-SPI | `a11y [--app S] [--max N]` `a11y-enable` `click --el N` |
@@ -46,10 +46,17 @@ Or install a link into a prefix:
 
 Global flags: `--version`, `--instance SIGNATURE`, `--display NAME` (target
 another Hyprland instance or Wayland display), `--quiet` (stdout only; exit
-codes and `ERR[code]` still apply), `--dry-run` (mutating verbs report what
-they would do — verbs with their own dry-run plan, like `close-apps` and
-`app-open`, produce that richer plan — reads still read), and `--timeout SEC`
-(the default window-wait timeout; a verb's own `--timeout` wins).
+codes and `ERR[code]` still apply, and a capture then needs `--out`),
+`--dry-run` (mutating verbs report what they would do — verbs with their own
+dry-run plan, like `close-apps` and `app-open`, produce that richer plan —
+reads still read), and `--timeout SEC` (the default window-wait timeout; a
+verb's own `--timeout` wins).
+
+They go **before the VERB**: `computer-control --dry-run switch 2`. Everything
+after the verb belongs to the verb, so a flag the verb does not have is
+`ERR[bad-args]` rather than a global — and never a silent no-op. A `sequence`
+step is a command line of its own, so it may carry them too, and they govern
+that step alone.
 
 The pointer and keyboard verbs take `--clearmodifiers` (release every
 modifier first — both `shift`s, `ctrl`s, `alt`s and `super`s — so a stuck hold

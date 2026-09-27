@@ -45,6 +45,10 @@ class KeyMap:
 
     MODS = {"ctrl": 29, "control": 29, "alt": 56, "super": 125, "win": 125,
             "mod": 125, "shift": 42}
+    # Both sides of every modifier, released by `--clearmodifiers`. Releasing
+    # a key that is not held is harmless; a modifier left held colours the
+    # next action.
+    MODIFIER_RELEASE_CODES = (29, 97, 56, 100, 42, 54, 125, 126)
     NAMES = {
         "return": 28, "enter": 28, "space": 57, "tab": 15, "escape": 1,
         "esc": 1, "backspace": 14, "delete": 111, "del": 111, "insert": 110,
@@ -235,31 +239,18 @@ class Pointer:
 class Keyboard:
     """wtype and ydotool key events."""
 
-    # Both sides of every modifier, released by `--clearmodifiers`. Releasing
-    # a key that is not held is harmless; a modifier left held colours the
-    # next action.
-    MODIFIER_RELEASE_CODES = (29, 97, 56, 100, 42, 54, 125, 126)
-
     def __init__(self, session: Session):
         self.session = session
 
     def clear_modifiers(self) -> None:
         """Release every modifier. ydotool only: its state persists."""
-        sequence = [f"{code}:0" for code in self.MODIFIER_RELEASE_CODES]
-        proc = self.session.run(["ydotool", "key", *sequence])
-        if proc.returncode != 0:
-            raise ControlError("ydotool",
-                               f"ydotool key failed: "
-                               f"{(proc.stderr or '').strip()}")
+        self._ydotool_key([f"{code}:0"
+                           for code in KeyMap.MODIFIER_RELEASE_CODES])
 
     def chord(self, codes: list[int]) -> None:
         sequence = [f"{code}:1" for code in codes] \
             + [f"{code}:0" for code in reversed(codes)]
-        proc = self.session.run(["ydotool", "key", *sequence])
-        if proc.returncode != 0:
-            raise ControlError("ydotool",
-                               f"ydotool key failed: "
-                               f"{(proc.stderr or '').strip()}")
+        self._ydotool_key(sequence)
 
     def wtype_chord(self, mods: tuple, keysym: str) -> None:
         argv = (["wtype"]
@@ -288,6 +279,10 @@ class Keyboard:
         """
         sequence = [f"{code}:{1 if down else 0}"
                     for code in KeyMap.codes(combo)]
+        self._ydotool_key(sequence)
+
+    def _ydotool_key(self, sequence: list[str]) -> None:
+        """Run one ``ydotool key`` line, refusing with the tool's own stderr."""
         proc = self.session.run(["ydotool", "key", *sequence])
         if proc.returncode != 0:
             raise ControlError("ydotool",
@@ -337,13 +332,18 @@ class Input:
     # -------------------------------------------------------------- motion
     def move(self, x: int, y: int, clearmodifiers: bool = False) -> Outcome:
         """Move the pointer and PROVE the warp landed, or refuse."""
+        want = self._check_target(x, y)     # refuse before any side effect
         if clearmodifiers:
             self.keyboard.clear_modifiers()
-        want = (int(x), int(y))
-        self.warp(want[0], want[1])
+        self._warp_to(want)
         return Outcome.confirmed("px", x=want[0], y=want[1])
 
     def warp(self, x: int, y: int) -> None:
+        """Warp to a target the compositor accepts, or refuse."""
+        self._warp_to(self._check_target(x, y))
+
+    def _check_target(self, x: int, y: int) -> tuple[int, int]:
+        """Read the desktop back and return a target it can hold, or refuse."""
         want = (int(x), int(y))
         box = self.session.desktop_bbox()
         if not self._inside(box, want):
@@ -357,6 +357,9 @@ class Input:
                 "move-not-verified",
                 f"pointer: {want} is on no monitor — the box between them is "
                 "not desktop")
+        return want
+
+    def _warp_to(self, want: tuple[int, int]) -> None:
         reach = self.session.pointer_reach()
         absolute = self._inside(reach, want)
         if absolute:
@@ -399,8 +402,6 @@ class Input:
               button: str = "L", double: bool = False,
               clearmodifiers: bool = False) -> Outcome:
         """Click at a point, or at the pointer when no coordinates are given."""
-        if clearmodifiers:
-            self.keyboard.clear_modifiers()
         button = str(button).upper()
         code = KeyMap.BUTTONS.get(button)
         if code is None:
@@ -410,8 +411,7 @@ class Input:
         if (x is None) != (y is None):
             raise ControlError("bad-args",
                                "click: coordinates are X Y (got one only)")
-        if x is not None and y is not None:
-            self.warp(x, y)
+        self._aim(x, y, clearmodifiers)
         for _ in range(2 if double else 1):
             self.pointer.button(code)
             if double:
@@ -422,8 +422,6 @@ class Input:
     def scroll(self, direction: str, amount: int,
                x: Optional[int] = None, y: Optional[int] = None,
                clearmodifiers: bool = False) -> Outcome:
-        if clearmodifiers:
-            self.keyboard.clear_modifiers()
         if direction not in ("up", "down", "left", "right"):
             raise ControlError("bad-args",
                                f"scroll: bad direction {direction!r}")
@@ -434,19 +432,34 @@ class Input:
         if amount < 1 or amount > 10_000:
             raise ControlError("bad-args",
                                f"scroll: AMOUNT must be 1..10000, got {amount}")
-        if x is not None and y is not None:
-            self.warp(x, y)
+        self._aim(x, y, clearmodifiers)
         self.pointer.wheel(direction, amount)
         return Outcome.unverifiable("pt", direction=direction, amount=amount)
 
+    def _aim(self, x: Optional[int], y: Optional[int],
+             clearmodifiers: bool) -> None:
+        """Release the modifiers, then warp — every check that needs no side
+        effect runs first, so a refused aim leaves nothing behind."""
+        want: Optional[tuple[int, int]] = None
+        if x is not None and y is not None:
+            want = self._check_target(x, y)
+        if clearmodifiers:
+            self.keyboard.clear_modifiers()
+        if want is not None:
+            self._warp_to(want)
+
     # ------------------------------------------------------------ keyboard
+    def clear_modifiers(self) -> None:
+        """Release every modifier (the AT-SPI click route calls this too)."""
+        self.keyboard.clear_modifiers()
+
     def key(self, combo: str, force_ydotool: bool = False,
             clearmodifiers: bool = False) -> Outcome:
         """Press a chord through the route that fits it."""
-        if clearmodifiers:
-            self.keyboard.clear_modifiers()
         parsed = KeyMap.parse(combo)
         keysym = KeyMap.wtype_name(parsed.key)
+        if clearmodifiers:
+            self.keyboard.clear_modifiers()
         if (not force_ydotool and keysym
                 and all(mod in ("ctrl", "control", "alt", "shift")
                         for mod in parsed.mods)):
@@ -469,16 +482,18 @@ class Input:
 
     def key_down(self, combo: str, clearmodifiers: bool = False) -> Outcome:
         """Hold a chord's keys down (a drag for the keyboard)."""
+        parsed = KeyMap.parse(combo)
         if clearmodifiers:
             self.keyboard.clear_modifiers()
-        self.keyboard.key_state(KeyMap.parse(combo), down=True)
+        self.keyboard.key_state(parsed, down=True)
         return Outcome.unverifiable("input", combo=combo, state="down")
 
     def key_up(self, combo: str, clearmodifiers: bool = False) -> Outcome:
         """Release a chord's keys."""
+        parsed = KeyMap.parse(combo)
         if clearmodifiers:
             self.keyboard.clear_modifiers()
-        self.keyboard.key_state(KeyMap.parse(combo), down=False)
+        self.keyboard.key_state(parsed, down=False)
         return Outcome.unverifiable("input", combo=combo, state="up")
 
     def drag(self, x1: int, y1: int, x2: int, y2: int, button: str = "L",
@@ -495,12 +510,10 @@ class Input:
             raise ControlError("bad-args",
                                f"drag: bad button {button!r} "
                                "(expected L, R or M)")
-        if clearmodifiers:
-            self.keyboard.clear_modifiers()
         start_x, start_y = int(x1), int(y1)
         end_x, end_y = int(x2), int(y2)
         steps = max(1, int(steps))
-        self.warp(start_x, start_y)
+        self._aim(start_x, start_y, clearmodifiers)
         self.pointer.press(code)
         try:
             for index in range(1, steps + 1):

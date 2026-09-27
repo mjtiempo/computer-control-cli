@@ -9,7 +9,7 @@ form takes and what it sends.
 import unittest
 
 from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
-from computer_control_cli.input import Input, KeyMap, Keyboard  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.input import Input, KeyMap  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.session import Session  # pi-lens-ignore: reportMissingImports
 
 from tests.fakes import FakeDiscoverer, FakeHyprland, FakeInputRunner  # pi-lens-ignore: reportMissingImports
@@ -312,7 +312,7 @@ class KeyboardHoldTests(unittest.TestCase):
     def test_clearmodifiers_releases_before_the_action(self):
         keyboard_input, runner = make_input()
         release = ["ydotool", "key"] + [f"{code}:0"
-                                         for code in Keyboard.MODIFIER_RELEASE_CODES]
+                                         for code in KeyMap.MODIFIER_RELEASE_CODES]
 
         keyboard_input.key("ctrl+c", clearmodifiers=True)
 
@@ -323,7 +323,7 @@ class KeyboardHoldTests(unittest.TestCase):
     def test_clearmodifiers_on_key_holds(self):
         keyboard_input, runner = make_input()
         release = ["ydotool", "key"] + [f"{code}:0"
-                                         for code in Keyboard.MODIFIER_RELEASE_CODES]
+                                         for code in KeyMap.MODIFIER_RELEASE_CODES]
 
         keyboard_input.key_down("shift+a", clearmodifiers=True)
         keyboard_input.key_up("shift+a", clearmodifiers=True)
@@ -336,7 +336,7 @@ class KeyboardHoldTests(unittest.TestCase):
     def test_clearmodifiers_on_type_click_and_drag(self):
         keyboard_input, runner = make_input()
         release = ["ydotool", "key"] + [f"{code}:0"
-                                         for code in Keyboard.MODIFIER_RELEASE_CODES]
+                                         for code in KeyMap.MODIFIER_RELEASE_CODES]
 
         keyboard_input.type_text("hi", clearmodifiers=True)
         keyboard_input.click(10, 10, clearmodifiers=True)
@@ -352,6 +352,36 @@ class KeyboardHoldTests(unittest.TestCase):
 
         self.assertFalse(any(call[:2] == ["ydotool", "key"] and all(
             part.endswith(":0") for part in call[2:]) for call in runner.calls))
+
+    def test_modifier_release_codes_cover_both_sides(self):
+        # Pinned literally: a wrong evdev code releases nothing, and every
+        # other clearmodifiers test derives its expectation from this tuple.
+        self.assertEqual(KeyMap.MODIFIER_RELEASE_CODES,
+                         (29, 97, 56, 100, 42, 54, 125, 126))
+
+    def test_a_refused_action_does_not_release_modifiers(self):
+        release = ["ydotool", "key"] + [f"{code}:0"
+                                        for code in KeyMap.MODIFIER_RELEASE_CODES]
+        cases = {
+            "scroll": lambda inp: inp.scroll("sideways", 5,
+                                             clearmodifiers=True),
+            "key": lambda inp: inp.key("ctrl+nosuchkey", clearmodifiers=True),
+            "key_down": lambda inp: inp.key_down("ctrl+nosuchkey",
+                                                 clearmodifiers=True),
+            "click": lambda inp: inp.click(1, 1, button="Q",
+                                           clearmodifiers=True),
+            "move": lambda inp: inp.move(99999, 99999, clearmodifiers=True),
+        }
+        for label, action in cases.items():
+            with self.subTest(label):
+                keyboard_input, runner = make_input()
+
+                with self.assertRaises(ControlError):
+                    action(keyboard_input)
+
+                self.assertNotIn(release, runner.calls,
+                                 f"a refused {label} must not have already "
+                                 "released the modifiers")
 
 
 class BreakingRunner(FakeInputRunner):

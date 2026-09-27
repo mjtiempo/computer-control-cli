@@ -15,7 +15,7 @@ import dataclasses
 import json
 import os
 import sys
-from typing import Any, Optional, Union
+from typing import Any, NoReturn, Optional, Union
 
 from computer_control_cli import __version__
 from computer_control_cli.a11y import A11y  # pi-lens-ignore: reportMissingImports
@@ -33,14 +33,39 @@ from computer_control_cli.system import SystemInfo  # pi-lens-ignore: reportMiss
 
 PROG = "computer-control"
 DESCRIPTION = "Drive a Hyprland desktop: reads, workspaces, apps, input."
+# The flags the top-level parser owns: everything after the VERB belongs to
+# the verb, so these only parse ahead of it — and a misplaced one must say so
+# instead of dying as an argparse usage dump.
+GLOBAL_FLAGS = ("--instance", "--display", "--quiet", "--dry-run", "--timeout")
+GLOBAL_HINT = (f"global flags ({', '.join(GLOBAL_FLAGS)}) go before the VERB "
+               "— after it, argparse hands them to the verb")
+
+
+class Parser(argparse.ArgumentParser):
+    """The parser that remembers what argparse refused, for the ERR contract."""
+
+    complaint = ""
+
+    def error(self, message: str) -> NoReturn:
+        self.complaint = message
+        super().error(message)
+
+    def misplaced(self) -> Optional[str]:
+        """The complaint rewritten when a global flag came after the verb."""
+        if not self.complaint.startswith("unrecognized arguments:"):
+            return None
+        words = self.complaint.split()[2:]
+        if any(word == flag or word.startswith(flag + "=")
+               for word in words for flag in GLOBAL_FLAGS):
+            return f"{self.complaint} — {GLOBAL_HINT}"
+        return None
 
 
 class ParserBuilder:
     """Builds the verb table and the global flags in one place."""
 
     def __init__(self):
-        self.parser = argparse.ArgumentParser(prog=PROG,
-                                              description=DESCRIPTION)
+        self.parser = Parser(prog=PROG, description=DESCRIPTION)
         self.parser.add_argument("--version", action="version",
                                  version=f"{PROG} {__version__}")
         self.parser.add_argument("--instance", default="",
@@ -66,7 +91,12 @@ class ParserBuilder:
         parser.add_argument("--out", default="")
         parser.add_argument("--no-cursor", action="store_true")
 
-    def build(self) -> argparse.ArgumentParser:
+    @staticmethod
+    def clearmodifier_flags(parser: argparse.ArgumentParser) -> None:
+        """One registration for the flag every pointer and key verb takes."""
+        parser.add_argument("--clearmodifiers", action="store_true")
+
+    def build(self) -> Parser:
         self.read_verbs()
         self.screen_verbs()
         self.window_verbs()
@@ -164,7 +194,7 @@ class ParserBuilder:
         move = self.verb("move", "move the pointer (verified)")
         move.add_argument("x", type=int)
         move.add_argument("y", type=int)
-        move.add_argument("--clearmodifiers", action="store_true")
+        self.clearmodifier_flags(move)
         click = self.verb("click", "click at a point, at the pointer, or an "
                                   "AT-SPI element")
         click.add_argument("x", nargs="?", type=int)
@@ -172,27 +202,27 @@ class ParserBuilder:
         click.add_argument("--button", default="L")
         click.add_argument("--double", action="store_true")
         click.add_argument("--el", type=int, default=None)
-        click.add_argument("--clearmodifiers", action="store_true")
+        self.clearmodifier_flags(click)
         scroll = self.verb("scroll", "scroll at the pointer or at X Y")
         scroll.add_argument("direction")
         scroll.add_argument("amount", type=int)
         scroll.add_argument("x", nargs="?", type=int)
         scroll.add_argument("y", nargs="?", type=int)
-        scroll.add_argument("--clearmodifiers", action="store_true")
+        self.clearmodifier_flags(scroll)
         key = self.verb("key", "press a key chord")
         key.add_argument("combo")
         key.add_argument("--ydotool", action="store_true")
-        key.add_argument("--clearmodifiers", action="store_true")
+        self.clearmodifier_flags(key)
         key_down = self.verb("key-down", "hold a chord's keys down")
         key_down.add_argument("combo")
-        key_down.add_argument("--clearmodifiers", action="store_true")
+        self.clearmodifier_flags(key_down)
         key_up = self.verb("key-up", "release a chord's keys")
         key_up.add_argument("combo")
-        key_up.add_argument("--clearmodifiers", action="store_true")
+        self.clearmodifier_flags(key_up)
         type_ = self.verb("type", "type text into the focused window")
         type_.add_argument("text")
         type_.add_argument("--delay", type=int, default=0)
-        type_.add_argument("--clearmodifiers", action="store_true")
+        self.clearmodifier_flags(type_)
         drag = self.verb("drag", "press, move and release the pointer")
         drag.add_argument("x1", type=int)
         drag.add_argument("y1", type=int)
@@ -200,7 +230,7 @@ class ParserBuilder:
         drag.add_argument("y2", type=int)
         drag.add_argument("--button", default="L")
         drag.add_argument("--duration", type=int, default=300)
-        drag.add_argument("--clearmodifiers", action="store_true")
+        self.clearmodifier_flags(drag)
         clipboard = self.verb("clipboard",
                               "read, write, clear, or list the clipboard")
         clipboard.add_argument("mode",
@@ -227,6 +257,7 @@ class Cli:
         self.quiet = False
         self.dry_run = False
         self.default_timeout = 15.0
+        self.interrupted = False
         self.build_services()
 
     # --------------------------------------------------------------- wiring
@@ -289,7 +320,12 @@ class Cli:
 
     def cmd_log(self, args) -> Any:
         if args.follow:
-            self.follow_log(args)
+            if self.quiet:
+                raise ControlError(
+                    "bad-args",
+                    "log --follow --quiet would never print anything and "
+                    "has no --out — drop --quiet")
+            self.interrupted = self.follow_log(args)
             return None
         entries = self.log.entries(args.count, since=args.since or None)
         if args.text:
@@ -299,22 +335,49 @@ class Cli:
             return None
         return entries
 
-    def follow_log(self, args) -> None:
-        """Tail the action log: one line per entry until interrupted."""
+    def follow_log(self, args) -> bool:
+        """Tail the action log, one entry per line, until the stream ends.
+
+        True when Ctrl+C ended it; a reader that closed the pipe
+        (``log --follow | head``) ends it without failing.
+        """
         try:
             for entry in self.log.follow(args.count,
                                          since=args.since or None):
-                if self.quiet:
-                    continue
                 if args.text:
                     print(ActionLog.render([entry])[0], flush=True)
                 else:
                     print(json.dumps(entry, separators=(",", ":")),
                           flush=True)
         except KeyboardInterrupt:
+            return True
+        except BrokenPipeError:
+            self.detach_stdout()
+            return False
+        return False
+
+    @staticmethod
+    def detach_stdout() -> None:
+        """Point the real stdout at /dev/null so its last flush stays quiet."""
+        try:
+            fileno = sys.stdout.fileno()
+        except (ValueError, OSError):      # a captured stdout has no descriptor
             return
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, fileno)
+            os.close(devnull)
+        except OSError:
+            pass
+
+    def require_out_for_capture(self, args, verb: str) -> None:
+        """A capture under ``--quiet`` would be dropped: refuse the no-op."""
+        if self.quiet and not str(getattr(args, "out", "") or ""):
+            raise ControlError("bad-args",
+                               f"{verb}: a capture under --quiet needs --out")
 
     def cmd_screen(self, args) -> Any:
+        self.require_out_for_capture(args, "screen")
         if args.monitor:
             data = self.screen.monitor(args.monitor, args.no_cursor)
             prefix = "monitor"
@@ -326,6 +389,7 @@ class Cli:
         return data
 
     def cmd_region(self, args) -> Any:
+        self.require_out_for_capture(args, "region")
         data = self.screen.region(args.x, args.y, args.w, args.h,
                                   args.no_cursor)
         if args.out:
@@ -333,6 +397,7 @@ class Cli:
         return data
 
     def cmd_active_screen(self, args) -> Any:
+        self.require_out_for_capture(args, "active-screen")
         if args.window:
             window = self.desktop.resolve(args.window, "active-screen")
             data = self.screen.capture_window(window, args.no_cursor)
@@ -361,8 +426,7 @@ class Cli:
     def cmd_wait_window(self, args) -> Any:
         exclude = {part.strip().lower()
                    for part in str(args.exclude).split(",") if part.strip()}
-        timeout = (args.timeout if args.timeout is not None
-                   else self.default_timeout)
+        timeout = self.resolve_timeout(args)
         return self.desktop.wait(args.spec, gone=args.gone,
                                  timeout=timeout, new_only=args.new_only,
                                  exclude=exclude, title=args.title,
@@ -371,14 +435,12 @@ class Cli:
     def cmd_launch(self, args) -> Any:
         if not args.program:
             raise ControlError("bad-args", "launch: a program is required")
-        timeout = (args.timeout if args.timeout is not None
-                   else self.default_timeout)
+        timeout = self.resolve_timeout(args)
         return self.apps.launch(args.program, wait=not args.no_wait,
                                 workspace=args.workspace, timeout=timeout)
 
     def cmd_app_open(self, args) -> Any:
-        timeout = (args.timeout if args.timeout is not None
-                   else self.default_timeout)
+        timeout = self.resolve_timeout(args)
         return self.apps.open(args.name, workspace=args.workspace,
                               cwd=args.cwd, timeout=timeout,
                               dry_run=args.dry_run)
@@ -402,6 +464,8 @@ class Cli:
                     "bad-args",
                     "click --el does not support --double (AT-SPI has no "
                     "double-click action); click by pixels instead")
+            if args.clearmodifiers:
+                self.input.clear_modifiers()
             return self.a11y.click_element(args.el, args.button)
         return self.input.click(args.x, args.y, args.button, args.double,
                                 args.clearmodifiers)
@@ -440,6 +504,7 @@ class Cli:
                     data = data.encode()
                 if args.out:
                     return self.save_bytes(data, args.out)
+                self.require_out_for_capture(args, "clipboard get")
                 return data          # raw bytes to stdout
             text = self.system.clipboard_get(primary)
             if args.out:
@@ -509,36 +574,40 @@ class Cli:
         try:
             args = parser.parse_args(argv)
         except SystemExit:
-            raise ControlError(
-                "bad-args", f"sequence: {argv!r} is not a valid call") \
-                from None
+            detail = parser.misplaced() or f"{argv!r} is not a valid call"
+            raise ControlError("bad-args", f"sequence: {detail}") from None
         verb = str(getattr(args, "verb", "") or "")
         handler = getattr(self, "cmd_" + verb.replace("-", "_"), None)
         if handler is None:
             raise ControlError("bad-args",
                                f"sequence: no verb called {verb!r}")
-        if self.dry_run and self.mutates(verb, args):
-            if hasattr(args, "dry_run"):
-                args.dry_run = True
-            else:
-                return self.plan()
-        result = handler(args)
-        if isinstance(result, bytes):
-            raise ControlError(
-                "bad-args",
-                "sequence: a screenshot step must use --out DIR")
-        return result
+        saved = (self.quiet, self.dry_run, self.default_timeout)
+        self.apply_globals(args)      # a step's flags govern that step only
+        try:
+            if self.dry_run and self.mutates(verb, args):
+                if hasattr(args, "dry_run"):
+                    args.dry_run = True
+                else:
+                    return self.plan(argv, verb, args)
+            result = handler(args)
+            if isinstance(result, bytes):
+                raise ControlError(
+                    "bad-args",
+                    "sequence: a screenshot step must use --out DIR")
+            return result
+        finally:
+            self.quiet, self.dry_run, self.default_timeout = saved
 
     def run(self) -> int:
         parser = self.build_parser()
         try:
             args = parser.parse_args(self._argv)
         except SystemExit as exit_error:  # --help, --version, bad usage
+            misplaced = parser.misplaced()
+            if misplaced and int(exit_error.code or 0):
+                return self.report(ControlError("bad-args", misplaced))
             return int(exit_error.code or 0)
-        self.quiet = bool(getattr(args, "quiet", False))
-        self.dry_run = bool(getattr(args, "dry_run_all", False))
-        if getattr(args, "timeout_default", None) is not None:
-            self.default_timeout = float(args.timeout_default)
+        self.apply_globals(args)
         if getattr(args, "instance", "") or getattr(args, "display", ""):
             try:
                 self.build_services(args.instance, args.display)
@@ -559,7 +628,7 @@ class Cli:
             else:
                 self.log.write(verb, ok=True, args=self.log_args(verb),
                                detail="dry-run")
-                return self.present(self.plan())
+                return self.present(self.plan(self._argv, verb, args))
         try:
             result = handler(args)
         except ControlError as error:
@@ -567,9 +636,31 @@ class Cli:
                            code=error.code, detail=error.message,
                            text=self.log_text(verb, args))
             return self.report(error)
+        if self.interrupted:
+            return 130                      # Ctrl+C: not a clean success
         self.log.write(verb, ok=True, args=self.log_args(verb),
                        text=self.log_text(verb, args))
         return self.present(result)
+
+    def apply_globals(self, args) -> None:
+        """Take every global flag the parsed namespace carries.
+
+        ``run`` applies it once for the whole call; ``dispatch`` applies it
+        to one sequence step and restores it afterwards, so a step's flags
+        do not outlive the step.
+        """
+        if getattr(args, "quiet", False):
+            self.quiet = True
+        if getattr(args, "dry_run_all", False):
+            self.dry_run = True
+        timeout = getattr(args, "timeout_default", None)
+        if timeout is not None:
+            self.default_timeout = float(timeout)
+
+    def resolve_timeout(self, args) -> float:
+        """The verb's own ``--timeout``, else the global default."""
+        own = getattr(args, "timeout", None)
+        return float(own) if own is not None else float(self.default_timeout)
 
     def present(self, result: Any) -> int:
         if self.quiet:
@@ -584,24 +675,31 @@ class Cli:
     MUTATING = frozenset({
         "switch", "focus", "close", "close-apps", "move-window", "launch",
         "app-open", "move", "click", "scroll", "drag", "key", "key-down",
-        "key-up", "type", "a11y-enable",
+        "key-up", "type", "a11y-enable", "audit",
     })
 
     @classmethod
     def mutates(cls, verb: str, args) -> bool:
         """Does this call change the desktop (or the filesystem)?"""
         if verb == "clipboard":
-            return str(getattr(args, "mode", "")) in ("set", "clear")
+            if str(getattr(args, "mode", "")) in ("set", "clear"):
+                return True
+            return bool(getattr(args, "out", ""))     # get --out writes bytes
         if verb == "dir":
             return bool(getattr(args, "create", False))
+        if verb in ("screen", "region", "active-screen"):
+            return bool(getattr(args, "out", ""))     # --out writes a file
         return verb in cls.MUTATING
 
-    def plan(self) -> dict:
-        """The dry-run reply: what would have run, and nothing else."""
-        return {"dry_run": True, "argv": [PROG, *self._argv]}
+    def plan(self, argv: list, verb: str, args) -> dict:
+        """The dry-run reply: what would have run — minus any secret text."""
+        secret = self.log_text(verb, args)
+        echoed = [PROG, *[("<redacted>" if word == secret else word)
+                          for word in argv]]
+        return {"dry_run": True, "argv": echoed}
 
     @classmethod
-    def build_parser(cls) -> argparse.ArgumentParser:
+    def build_parser(cls) -> Parser:
         return ParserBuilder().build()
 
     @staticmethod

@@ -13,7 +13,7 @@ from computer_control_cli.a11y import A11y  # pi-lens-ignore: reportMissingImpor
 from computer_control_cli.cli import Cli  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.config import Config  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.desktop import Desktop  # pi-lens-ignore: reportMissingImports
-from computer_control_cli.input import Keyboard  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.input import KeyMap  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.log import ActionLog  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.session import Session  # pi-lens-ignore: reportMissingImports
 
@@ -225,7 +225,7 @@ class CliInputTests(CliFixture):
 
     def test_clearmodifiers_releases_before_typing(self):
         release = ["ydotool", "key"] + [f"{code}:0"
-                                         for code in Keyboard.MODIFIER_RELEASE_CODES]
+                                         for code in KeyMap.MODIFIER_RELEASE_CODES]
 
         self.run_json("type", "hi", "--clearmodifiers")
 
@@ -375,6 +375,17 @@ class CliA11yTests(CliFixture):
         self.assertEqual(code, 1)
         self.assertIn("ERR[bad-args]", stderr)
 
+    def test_click_el_clears_modifiers(self):
+        self.runner.responses[f"python3 {A11y.bridge_path()} click 0"] = \
+            json.dumps({"ok": True, "route": "ax", "action": "press",
+                        "role": "push button", "name": "Save"})
+        release = ["ydotool", "key"] + [f"{code}:0"
+                                        for code in KeyMap.MODIFIER_RELEASE_CODES]
+
+        self.run_json("click", "--el", "0", "--clearmodifiers")
+
+        self.assertEqual(self.runner.calls[0], release)
+
     def test_a11y_enable(self):
         set_key = ("busctl --user set-property org.a11y.Bus /org/a11y/bus "
                    "org.a11y.Status IsEnabled b true")
@@ -453,6 +464,47 @@ class CliSequenceTests(CliFixture):
         self.assertEqual(code, 1)
         self.assertIn("ERR[bad-args]", stderr)
 
+    def test_sequence_step_dry_run_does_not_act(self):
+        steps = json.dumps([["--dry-run", "switch", "2"],
+                            ["--dry-run", "move", "100", "100"]])
+
+        results = self.run_json("sequence", steps)
+
+        self.assertTrue(all(result["dry_run"] for result in results))
+        self.assertEqual(self.hypr.active_workspace, 1)
+        self.assertEqual(self.hypr.dispatch_log, [])
+        self.assertFalse(any(call[:2] == ["ydotool", "mousemove"]
+                             for call in self.runner.calls))
+
+    def test_sequence_step_plans_name_the_step(self):
+        steps = json.dumps([["--dry-run", "switch", "2"],
+                            ["--dry-run", "move", "100", "100"]])
+
+        results = self.run_json("sequence", steps)
+
+        self.assertIn("switch", results[0]["argv"])
+        self.assertIn("move", results[1]["argv"])
+        self.assertNotEqual(results[0]["argv"], results[1]["argv"])
+
+    def test_sequence_step_timeout_is_honoured(self):
+        stub = StubWait()
+        steps = json.dumps([["--timeout", "0", "wait-window", "class:nope"]])
+
+        with mock.patch.object(Desktop, "wait", stub):
+            self.run_json("sequence", steps)
+
+        self.assertEqual(stub.calls[0]["timeout"], 0.0)
+
+    def test_a_steps_timeout_does_not_leak_to_later_steps(self):
+        stub = StubWait()
+        steps = json.dumps([["--timeout", "7", "wait-window", "class:foot"],
+                            ["wait-window", "class:foot"]])
+
+        with mock.patch.object(Desktop, "wait", stub):
+            self.run_json("sequence", steps)
+
+        self.assertEqual([call["timeout"] for call in stub.calls], [7.0, 15.0])
+
 
 class StubFollow:
     """Stands in for ``ActionLog.follow`` so a test can end the stream."""
@@ -473,6 +525,21 @@ class StubWait:
     def __call__(self, _desktop, spec="", **kwargs):
         self.calls.append({"spec": spec, **kwargs})
         return {}
+
+
+class StubInterruptedFollow(StubFollow):
+    """Yields what it has, then behaves like Ctrl+C at the terminal."""
+
+    def __call__(self, count=10, since=None, poll=0.25):
+        yield from self.entries
+        raise KeyboardInterrupt
+
+
+class ClosedPipe(io.StringIO):
+    """A stdout whose reader has gone away, as in ``log --follow | head``."""
+
+    def write(self, text):
+        raise BrokenPipeError(32, "Broken pipe")
 
 
 class CliGlobalFlagTests(CliFixture):
@@ -537,11 +604,71 @@ class CliGlobalFlagTests(CliFixture):
         self.assertEqual(stub.calls[0]["timeout"], 3.0)
 
     def test_the_verbs_own_timeout_wins(self):
-        code, _, stderr = self.run_cli("--timeout", "5", "wait-window",
-                                       "class:nope", "--timeout", "0")
+        stub = StubWait()
+
+        with mock.patch.object(Desktop, "wait", stub):
+            self.run_json("--timeout", "5", "wait-window", "class:nope",
+                          "--timeout", "0")
+
+        self.assertEqual(stub.calls[0]["timeout"], 0.0)
+
+    def test_a_global_flag_after_the_verb_is_bad_args(self):
+        code, stdout, stderr = self.run_cli("switch", "2", "--dry-run")
 
         self.assertEqual(code, 1)
-        self.assertIn("ERR[wait-timeout]", stderr)
+        self.assertEqual(stdout, "")
+        self.assertIn("ERR[bad-args]", stderr)
+        self.assertIn("before the VERB", stderr)
+        self.assertEqual(self.hypr.dispatch_log, [])
+
+    def test_dry_run_capture_with_out_writes_no_file(self):
+        target = os.path.join(self._tmp.name, "shot.png")
+
+        result = self.run_json("--dry-run", "screen", "--out", target)
+
+        self.assertTrue(result["dry_run"])
+        self.assertFalse(os.path.exists(target))
+
+    def test_dry_run_clipboard_get_with_out_writes_no_file(self):
+        target = os.path.join(self._tmp.name, "clip.txt")
+
+        result = self.run_json("--dry-run", "clipboard", "get",
+                               "--out", target)
+
+        self.assertTrue(result["dry_run"])
+        self.assertFalse(os.path.exists(target))
+
+    def test_dry_run_audit_does_not_probe(self):
+        self.runner.responses["grim -s 1 -"] = png(1920, 1080)
+
+        result = self.run_json("--dry-run", "audit", "--no-a11y")
+
+        self.assertTrue(result["dry_run"])
+        self.assertFalse(any(call[:2] == ["ydotool", "mousemove"]
+                             for call in self.runner.calls))
+
+    def test_dry_run_type_redacts_the_text(self):
+        result = self.run_json("--dry-run", "type", "hunter2-SECRET")
+
+        self.assertTrue(result["dry_run"])
+        self.assertIn("<redacted>", result["argv"])
+        self.assertNotIn("hunter2-SECRET", result["argv"])
+
+    def test_quiet_capture_without_out_refuses(self):
+        code, stdout, stderr = self.run_cli("--quiet", "screen")
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn("ERR[bad-args]", stderr)
+        self.assertIn("--out", stderr)
+
+    def test_quiet_follow_refuses(self):
+        with mock.patch.object(ActionLog, "follow", StubFollow([])):
+            code, stdout, stderr = self.run_cli("--quiet", "log", "--follow")
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn("ERR[bad-args]", stderr)
 
 
 class CliLogFollowTests(CliFixture):
@@ -565,6 +692,31 @@ class CliLogFollowTests(CliFixture):
 
         self.assertEqual(code, 0)
         self.assertIn("move ok", stdout)
+
+    def test_follow_interrupted_exits_130_without_claiming_success(self):
+        stub = StubInterruptedFollow(self.ENTRIES)
+
+        with mock.patch.object(ActionLog, "follow", stub):
+            code, _, _ = self.run_cli("log", "--follow")
+
+        self.assertEqual(code, 130)
+        path = os.path.join(self._tmp.name, "actions.jsonl")
+        written = ""
+        if os.path.exists(path):
+            with open(path) as handle:
+                written = handle.read()
+        self.assertNotIn('"action":"log"', written,
+                         "an interrupted tail must not log a clean success")
+
+    def test_follow_survives_a_closed_pipe(self):
+        pipe = ClosedPipe()
+
+        with mock.patch.object(ActionLog, "follow", StubFollow(self.ENTRIES)):
+            with redirect_stdout(pipe), redirect_stderr(io.StringIO()):
+                code = Cli(["log", "--follow"], session=self.session,
+                           config=self.config).run()
+
+        self.assertEqual(code, 0)
 
 
 class CliRefusalTests(CliFixture):
