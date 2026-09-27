@@ -103,6 +103,22 @@ computer-control clipboard get --type image/png --out back.png
 computer-control clipboard clear --primary
 ```
 
+## Skills
+
+`.opencode/skills/` holds the agent-facing skills — how to *use* this CLI,
+one skill per area, each loading the shared contract from the core one:
+
+| Skill | Covers |
+| --- | --- |
+| `computer-control` | the contract: JSON/`ERR[code]`/exit codes, the read-act-verify loop, global flags, window targets, outcome keys, verb index, the refusal table |
+| `computer-control-windows` | `state` `windows` `active` `workspaces` `monitors` `switch` `focus` `close` `close-apps` `move-window` `wait-window` `apps` `which` `dir` `app-open` `launch` |
+| `computer-control-screen` | `screen` `region` `active-screen`, `--out`, logical coordinates, multi-monitor layout, look-then-click |
+| `computer-control-input` | `move` `click` `scroll` `drag` `key` `key-down` `key-up` `type` `clipboard`, chord syntax, `--clearmodifiers`, redaction |
+| `computer-control-a11y` | `a11y` `a11y-enable` `click --el N`, element identity, coverage, the px fallback |
+
+`skill/computer-control/SKILL.md` is a link to the core skill, so the
+drift gate in `tests/test_skill.py` reads the same file the agent loads.
+
 ## Architecture
 
 One class per responsibility; services receive their `Session` and `Config`
