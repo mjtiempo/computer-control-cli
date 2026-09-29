@@ -74,8 +74,8 @@ have is `ERR[bad-args]`, never a silent no-op.
   `app-open` `move` `click` `scroll` `drag` `key` `key-down` `key-up` `type`
   `a11y-enable` `audit`, plus `clipboard set|clear`, `dir --create`, and any
   capture or `clipboard get` given `--out`.
-- `--timeout SEC` is the default window-wait timeout (15 s); a verb's own
-  `--timeout` wins.
+- `--timeout SEC` is the default timeout (60 s) for waiting on a window and
+  for verifying a dispatch; a verb's own `--timeout` wins.
 - `--instance` / `--display` target another Hyprland instance or Wayland
   display; the rest of the call runs against it.
 
@@ -88,6 +88,8 @@ have is `ERR[bad-args]`, never a silent no-op.
 - Several matches refuse `ERR[ambiguous-window]` — there is never a silent
   first match. Re-target with `address:0x…` from `windows`.
 - No match is `ERR[window-not-found]`.
+- `close` with no `SPEC` and no focused window (an empty desktop) is
+  `ERR[empty-desktop]` — nothing was closed and nothing was claimed.
 
 ## Choosing a target: act at the highest tier that works
 
@@ -148,7 +150,7 @@ Every code the CLI can raise (`ERR[code]: message` on stderr, exit 1):
 | `hyprctl` `dispatch` | the compositor's own command failed |
 | `type` `ydotool` | the keyboard or pointer device refused |
 | `capture` `clipboard` | grim/wl-clipboard failed, or the capture is not a PNG |
-| `window-not-found` `ambiguous-window` | the target names none, or several — use `address:0x…` |
+| `window-not-found` `ambiguous-window` `empty-desktop` | the target names none, or several — use `address:0x…`; an empty desktop has nothing to act on |
 | `focus-not-verified` `close-not-verified` `switch-not-verified` `move-not-verified` | the compositor answered ok and did not apply: re-read state, do not retry blindly |
 | `wait-timeout` | the window did not appear (or did not go away) in time |
 | `monitor-not-found` `ambiguous-monitor` | no monitor, or several, match the name |

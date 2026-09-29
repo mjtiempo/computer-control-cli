@@ -219,15 +219,25 @@ class DesktopCloseTests(unittest.TestCase):
         self.assertTrue(result.verified)
         self.assertEqual([c["address"] for c in hypr.clients], ["0xbbb2", "0xccc3"])
 
-    def test_bare_close_with_nothing_focused_is_honest(self):
+    def test_bare_close_with_nothing_focused_refuses(self):
         hypr = FakeHyprland(clients=[dict(c) for c in CLIENTS])
         hypr.active_address = ""
         desktop, _ = make_desktop(hypr)
 
-        result = desktop.close()
+        with self.assertRaises(ControlError) as caught:
+            desktop.close()
 
-        self.assertFalse(result.ok)
-        self.assertEqual(result.effect, "unverifiable")
+        self.assertEqual(caught.exception.code, "empty-desktop")
+
+    def test_bare_close_on_an_empty_reply_refuses_too(self):
+        hypr = FakeHyprland(clients=[dict(c) for c in CLIENTS])
+        hypr.empty_active = True
+        desktop, _ = make_desktop(hypr)
+
+        with self.assertRaises(ControlError) as caught:
+            desktop.close()
+
+        self.assertEqual(caught.exception.code, "empty-desktop")
 
 
 class DesktopMoveTests(unittest.TestCase):

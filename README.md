@@ -49,8 +49,8 @@ another Hyprland instance or Wayland display), `--quiet` (stdout only; exit
 codes and `ERR[code]` still apply, and a capture then needs `--out`),
 `--dry-run` (mutating verbs report what they would do — verbs with their own
 dry-run plan, like `close-apps` and `app-open`, produce that richer plan —
-reads still read), and `--timeout SEC` (the default window-wait timeout; a
-verb's own `--timeout` wins).
+reads still read), and `--timeout SEC` (the default timeout for waiting on a
+window and verifying a dispatch — 60 s; a verb's own `--timeout` wins).
 
 They go **before the VERB**: `computer-control --dry-run switch 2`. Everything
 after the verb belongs to the verb, so a flag the verb does not have is

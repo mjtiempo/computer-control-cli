@@ -5,6 +5,7 @@ import json
 import os
 import struct
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
@@ -562,7 +563,7 @@ class CliSequenceTests(CliFixture):
         with mock.patch.object(Desktop, "wait", stub):
             self.run_json("sequence", steps)
 
-        self.assertEqual([call["timeout"] for call in stub.calls], [7.0, 15.0])
+        self.assertEqual([call["timeout"] for call in stub.calls], [7.0, 60.0])
 
 
 class StubFollow:
@@ -811,6 +812,25 @@ class CliRefusalTests(CliFixture):
 
         self.assertEqual(code, 1)
         self.assertIn("ERR[create-failed]", stderr)
+
+    def test_close_on_an_empty_desktop_is_a_refusal(self):
+        self.hypr.empty_active = True
+
+        code, _, stderr = self.run_cli("close")
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[empty-desktop]", stderr)
+
+    def test_the_global_timeout_reaches_the_verification_budget(self):
+        self.hypr.honor_dispatches = False
+        started = time.time()
+
+        code, _, stderr = self.run_cli("--timeout", "1", "switch", "2")
+
+        self.assertEqual(code, 1, stderr)
+        self.assertIn("ERR[switch-not-verified]", stderr)
+        self.assertGreaterEqual(time.time() - started, 0.9,
+                                "the resolved timeout must set the poll budget")
 
     def test_unknown_verb_is_usage(self):
         code, _, stderr = self.run_cli("nope")

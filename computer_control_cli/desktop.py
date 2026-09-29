@@ -164,10 +164,12 @@ class Desktop:
         return cls._SEPARATOR.sub("-", str(value or "").lower()).strip("-")
 
     # ------------------------------------------------------ window actions
-    def switch(self, workspace: int) -> Outcome:
+    def switch(self, workspace: int,
+               timeout: Optional[float] = None) -> Outcome:
         """Focus workspace N and prove the switch took."""
         self.session.dispatch(f"hl.dsp.focus({{ workspace = {int(workspace)} }})")
-        seen = self._poll(lambda: self.active_workspace_id() == int(workspace))
+        seen = self._poll(lambda: self.active_workspace_id() == int(workspace),
+                          timeout)
         if not seen:
             raise ControlError(
                 "switch-not-verified",
@@ -175,13 +177,14 @@ class Desktop:
                 f"workspace is {self.active_workspace_id()}")
         return Outcome.confirmed("dispatch", workspace=int(workspace))
 
-    def focus(self, spec: str) -> Outcome:
+    def focus(self, spec: str, timeout: Optional[float] = None) -> Outcome:
         """Set keyboard focus to one window and prove it took."""
         window = self.resolve(spec, "focus")
         self.session.dispatch(
             f'hl.dsp.focus({{ window = "address:{window.address}", '
             f'follow = true }})')
-        seen = self._poll(lambda: self._active_address() == window.address.lower())
+        seen = self._poll(
+            lambda: self._active_address() == window.address.lower(), timeout)
         if not seen:
             current = self.active()
             raise ControlError(
@@ -191,22 +194,26 @@ class Desktop:
         return Outcome.confirmed("dispatch", address=window.address,
                                  **{"class": window.cls})
 
-    def close(self, spec: Optional[str] = None) -> Outcome:
+    def close(self, spec: Optional[str] = None,
+              timeout: Optional[float] = None) -> Outcome:
         """Close a window and prove it is gone.
 
         With a target, close exactly that window; without one, close the
         FOCUSED window — its address is read first, so both forms have a
-        read-back.
+        read-back. An empty desktop has nothing to close and nothing to
+        claim: it refuses instead of reporting a close that never happened.
         """
         window = self.resolve(spec, "close") if spec else self.active()
         address = window.address if window else ""
         if not address:
-            self.session.dispatch("hl.dsp.window.close()")
-            return Outcome.unverifiable("dispatch", ok=False,
-                                        closed="focused window")
+            raise ControlError(
+                "empty-desktop",
+                "close: no window is focused — the desktop is empty, so "
+                "nothing was closed")
         self.session.dispatch(
             f'hl.dsp.window.close({{ window = "address:{address}" }})')
-        seen = self._poll(lambda: address.lower() not in self._open_addresses())
+        seen = self._poll(lambda: address.lower() not in self._open_addresses(),
+                          timeout)
         if not seen:
             raise ControlError(
                 "close-not-verified",
@@ -216,7 +223,8 @@ class Desktop:
                                  closed=(window.title or window.cls)
                                  if window else "focused window")
 
-    def move_window(self, spec: str, workspace: Any) -> Outcome:
+    def move_window(self, spec: str, workspace: Any,
+                    timeout: Optional[float] = None) -> Outcome:
         """Move one window to a workspace and return once it is read back."""
         window = self.resolve(spec, "move-window")
         wanted = str(workspace).strip()
@@ -235,7 +243,7 @@ class Desktop:
                         or str(here.get("name")) == wanted_row)
             return False
 
-        seen = self._poll(is_there)
+        seen = self._poll(is_there, timeout)
         if not seen:
             raise ControlError(
                 "move-not-verified",
@@ -361,10 +369,21 @@ class Desktop:
         return {str(row.get("address", "")).lower() for row in self.clients()}
 
     @staticmethod
-    def _poll(condition) -> bool:
-        """Run ``condition`` until it holds, up to the shared poll budget."""
-        for _ in range(POLL_TRIES):
+    def _poll(condition, timeout: Optional[float] = None) -> bool:
+        """Run ``condition`` until it holds, up to ``timeout`` seconds.
+
+        The CLI passes the resolved ``--timeout``; a caller that passes
+        nothing gets the built-in budget, so a service used directly still
+        refuses promptly.
+        """
+        deadline = (None if timeout is None
+                    else time.time() + max(0.0, float(timeout)))
+        tries = 0
+        while deadline is None or time.time() < deadline:
             if condition():
                 return True
+            tries += 1
+            if deadline is None and tries >= POLL_TRIES:
+                break
             time.sleep(POLL_DELAY)
         return bool(condition())

@@ -80,7 +80,8 @@ class ParserBuilder:
                                  help="report actions without doing them")
         self.parser.add_argument("--timeout", dest="timeout_default",
                                  type=float, default=None,
-                                 help="default window-wait timeout in seconds")
+                                 help="default timeout in seconds for window "
+                                      "waits and dispatch verification (60)")
         self.subs = self.parser.add_subparsers(dest="verb", metavar="VERB")
 
     def verb(self, name: str, help_text: str) -> argparse.ArgumentParser:
@@ -256,7 +257,7 @@ class Cli:
         self.config = config or Config()
         self.quiet = False
         self.dry_run = False
-        self.default_timeout = 15.0
+        self.default_timeout = 60.0
         self.interrupted = False
         self.failed_checks = False      # audit: rows print, the exit says 1
         self.build_services()
@@ -413,20 +414,21 @@ class Cli:
         return data
 
     def cmd_switch(self, args) -> Any:
-        return self.desktop.switch(args.workspace)
+        return self.desktop.switch(args.workspace, self.resolve_timeout(args))
 
     def cmd_focus(self, args) -> Any:
-        return self.desktop.focus(args.spec)
+        return self.desktop.focus(args.spec, self.resolve_timeout(args))
 
     def cmd_close(self, args) -> Any:
-        return self.desktop.close(args.spec)
+        return self.desktop.close(args.spec, self.resolve_timeout(args))
 
     def cmd_close_apps(self, args) -> Any:
         return self.desktop.close_apps(args.kind, args.match, args.keep,
                                        args.dry_run)
 
     def cmd_move_window(self, args) -> Any:
-        return self.desktop.move_window(args.spec, args.workspace)
+        return self.desktop.move_window(args.spec, args.workspace,
+                                        self.resolve_timeout(args))
 
     def cmd_wait_window(self, args) -> Any:
         exclude = {part.strip().lower()
