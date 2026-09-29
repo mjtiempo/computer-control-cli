@@ -94,6 +94,19 @@ class DesktopReadTests(unittest.TestCase):
         self.assertEqual(len(desktop.windows()), 1)
 
 
+class FakeFidelityTests(unittest.TestCase):
+    """The desktop double fails loudly on a dispatcher it does not model."""
+
+    def test_an_unmodelled_dispatch_is_a_compositor_error(self):
+        hypr = FakeHyprland(clients=[dict(c) for c in CLIENTS])
+        session = Session(env=ENV, runner=hypr, discoverer=FakeDiscoverer(ENV))
+
+        with self.assertRaises(ControlError) as caught:
+            session.dispatch("hl.dsp.window.close_all({})")
+
+        self.assertEqual(caught.exception.code, "dispatch")
+
+
 class DesktopResolveTests(unittest.TestCase):
     def test_resolves_one_window(self):
         desktop, _ = make_desktop()

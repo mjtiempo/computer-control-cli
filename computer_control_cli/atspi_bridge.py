@@ -175,10 +175,16 @@ class TreeWalker:
             except Exception:
                 pass
             if cls.included(role, name, value, actions):
+                pid = 0
+                try:
+                    pid = int(accessible.get_process_id())
+                except Exception:                        # noqa: BLE001
+                    pass
                 rows.append({"index": len(rows), "app": app, "role": role,
                              "name": name[:80], "value": value[:80],
                              "enabled": enabled, "selected": selected,
-                             "actions": actions, "frame": frame})
+                             "actions": actions, "frame": frame,
+                             "pid": pid})
                 if accs is not None:
                     accs.append(accessible)
                 if len(rows) >= max_rows:
@@ -303,6 +309,7 @@ class AtspiBridge:
             sys.stdout.write(json.dumps({
                 "ok": True, "route": "px-fallback",
                 "x": x + w // 2, "y": y + h // 2, "app": row["app"],
+                "pid": row.get("pid", 0),
                 "role": row["role"], "name": row["name"]}))
             sys.stdout.write("\n")
             return 0

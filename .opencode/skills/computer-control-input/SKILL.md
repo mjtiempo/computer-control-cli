@@ -88,7 +88,8 @@ sides of shift, ctrl, alt and super **before** the action, so a modifier left
 held by an earlier `key-down` (or by the user) cannot colour this one. It is
 ydotool-only — wtype already releases what it pressed when it exits. Reach
 for it when an action behaves as if Shift were down, or after any
-`key-down` you did not pair.
+`key-down` you did not pair. It needs a real action to attach to:
+`key --clearmodifiers shift` is `bad-combo`, because a combo needs a key.
 
 ## Clipboard
 
@@ -144,7 +145,7 @@ computer-control key ctrl+v
 computer-control key-down shift
 computer-control click 800 400          # extend-select
 computer-control key-up shift
-computer-control key --clearmodifiers shift     # or just clear everything
+computer-control key --clearmodifiers ctrl+a      # release anything held, then the chord
 ```
 
 ## Refusals you will see here

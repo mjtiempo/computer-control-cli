@@ -60,13 +60,14 @@ move is to fall back to pixels (`computer-control-screen` +
    `a11y`, re-pick — the desktop changed under you).
 3. It has an AT-SPI action → `doAction`, `rung: "ax"`, `effect:
    "unverifiable"`. A failed action is `atspi`.
-4. No action → **pixel fallback**: the element's `frame` centre plus the
-   focused window's origin, warped to and clicked (`rung: "px"`,
+4. No action → **pixel fallback**: the element's `frame` centre, which AT-SPI
+   reports in screen coordinates, warped to and clicked (`rung: "px"`,
    `route: "px-fallback"`). Before clicking, the CLI checks that the element's
-   application plausibly owns the **focused** window; if not, it refuses
-   `element-owner-mismatch` rather than aiming one window's coordinates at
-   another. Fix by focusing the right window (`focus SPEC`) or by clicking by
-   pixels yourself.
+   application plausibly owns the **focused** window, that the element's
+   process IS that window's process, and that the point falls inside the
+   focused window's rect; otherwise it refuses `element-owner-mismatch`
+   rather than aiming one window's coordinates at another. Fix by focusing
+   the right window (`focus SPEC`) or by clicking by pixels yourself.
 
 `click --el` does not take `--double` (AT-SPI has no double-click action) —
 that combination is `bad-args`; double-click by pixels instead. `--button`

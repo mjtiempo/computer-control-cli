@@ -347,16 +347,26 @@ class CliInputTests(CliFixture):
 
     def test_click_el_px_fallback(self):
         self.runner.responses[f"python3 {A11y.bridge_path()} click 0"] = \
-            json.dumps({"ok": True, "route": "px-fallback", "x": 10,
-                        "y": 20, "app": "foot", "role": "push button",
+            json.dumps({"ok": True, "route": "px-fallback", "x": 110,
+                        "y": 220, "app": "foot", "role": "push button",
                         "name": "Save"})
 
         result = self.run_json("click", "--el", "0")
 
         self.assertEqual(result["route"], "px-fallback")
-        self.assertEqual(result["x"], 110)   # + focused window origin
+        self.assertEqual(result["x"], 110)   # screen coords, as reported
         self.assertEqual(result["y"], 220)
         self.assertIn(["ydotool", "click", "0xC0"], self.runner.calls)
+
+    def test_the_rung_vocabulary_is_the_documented_one(self):
+        rungs = {self.run_json("scroll", "down", "1")["rung"],
+                 self.run_json("click")["rung"],
+                 self.run_json("key", "a")["rung"],
+                 self.run_json("type", "hi")["rung"]}
+
+        self.assertLessEqual(
+            rungs, {"dispatch", "px", "input", "app", "poll", "ax"},
+            f"undocumented rung(s): {rungs}")
 
     def test_log_text_lines(self):
         self.run_json("type", "hi")
@@ -774,6 +784,33 @@ class CliRefusalTests(CliFixture):
 
         self.assertEqual(code, 1)
         self.assertIn("ERR[window-not-found]", stderr)
+
+    def test_a_failing_device_is_a_ydotool_refusal(self):
+        self.runner.fail_prefixes.add("ydotool")
+
+        code, _, stderr = self.run_cli("move", "10", "20")
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[ydotool]", stderr)
+
+    def test_a_runner_that_raises_is_a_subprocess_refusal(self):
+        self.runner.raise_oserror.add("hyprctl")
+
+        code, _, stderr = self.run_cli("pos")
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[subprocess-failed]", stderr)
+
+    def test_a_directory_under_a_file_is_create_failed(self):
+        blocker = os.path.join(self._tmp.name, "a-file")
+        with open(blocker, "w") as handle:
+            handle.write("x")
+
+        code, _, stderr = self.run_cli("dir", os.path.join(blocker, "sub"),
+                                       "--create")
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[create-failed]", stderr)
 
     def test_unknown_verb_is_usage(self):
         code, _, stderr = self.run_cli("nope")

@@ -70,8 +70,9 @@ class A11yIndexTests(unittest.TestCase):
         a11y, runner = make_a11y(
             responses={f"python3 {BRIDGE} index --max 1 --no-save": "[]"})
 
-        a11y.index(max_items=1, snapshot=False)
+        rows = a11y.index(max_items=1, snapshot=False)
 
+        self.assertEqual(rows, [])
         self.assertEqual(runner.calls[-1][3:], ["--max", "1", "--no-save"])
 
 
@@ -112,16 +113,41 @@ class A11yClickTests(unittest.TestCase):
     def test_px_fallback_warps_and_clicks(self):
         a11y, runner = make_a11y(responses={
             f"python3 {BRIDGE} click 0": json.dumps(
-                {"ok": True, "route": "px-fallback", "x": 10, "y": 20,
+                {"ok": True, "route": "px-fallback", "x": 110, "y": 220,
                  "app": "foot", "role": "push button", "name": "Save"})})
 
         result = a11y.click_element(0)
 
         self.assertEqual(result.details["route"], "px-fallback")
-        self.assertEqual(result.details["x"], 110)   # + window origin (100,200)
+        self.assertEqual(result.details["x"], 110)   # screen coords, as sent
         self.assertEqual(result.details["y"], 220)
         self.assertEqual(runner.cursorpos(), "110,220")
         self.assertIn(["ydotool", "click", "0xC0"], runner.calls)
+
+    def test_px_fallback_refuses_another_process(self):
+        a11y, runner = make_a11y(responses={
+            f"python3 {BRIDGE} click 0": json.dumps(
+                {"ok": True, "route": "px-fallback", "x": 110, "y": 220,
+                 "pid": 999, "app": "foot", "role": "push button",
+                 "name": "Save"})})   # the focused client is pid 11
+
+        with self.assertRaises(ControlError) as caught:
+            a11y.click_element(0)
+
+        self.assertEqual(caught.exception.code, "element-owner-mismatch")
+        self.assertNotIn(["ydotool", "click", "0xC0"], runner.calls)
+
+    def test_px_fallback_refuses_a_point_outside_the_window(self):
+        a11y, runner = make_a11y(responses={
+            f"python3 {BRIDGE} click 0": json.dumps(
+                {"ok": True, "route": "px-fallback", "x": 10, "y": 20,
+                 "app": "foot", "role": "push button", "name": "Save"})})
+
+        with self.assertRaises(ControlError) as caught:
+            a11y.click_element(0)
+
+        self.assertEqual(caught.exception.code, "element-owner-mismatch")
+        self.assertNotIn(["ydotool", "click", "0xC0"], runner.calls)
 
     def test_px_fallback_owner_mismatch_refuses(self):
         a11y, _ = make_a11y(responses={
@@ -294,6 +320,9 @@ class FakeNode:
     def get_component_iface(self):
         return None
 
+    def get_process_id(self):
+        return 4242
+
 
 class FakeAtspi:
     """The Atspi module double: ``get_desktop`` and the two enums are all
@@ -341,6 +370,7 @@ class TreeWalkerTests(unittest.TestCase):
         rows = json.loads(stdout.getvalue())
         self.assertEqual([row["app"] for row in rows],
                          ["nautilus", "nautilus"])
+        self.assertEqual(rows[0]["pid"], 4242)
 
 
 if __name__ == "__main__":

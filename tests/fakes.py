@@ -197,19 +197,17 @@ class FakeHyprland:
             for client in self.spawn_on_exec:
                 self.clients.append(dict(client))
             return
-        if "hl.dsp.focus" in expression and "window" in expression and window:
-            self.active_address = window.group(1)
+        if expression.startswith("hl.dsp.focus("):
+            if window:
+                self.active_address = window.group(1)
+                return
+            if workspace:
+                self.active_workspace = int(workspace)
+                return
+        if expression.startswith("hl.dsp.window.close("):
+            self._close(window.group(1) if window else self.active_address)
             return
-        if "hl.dsp.focus" in expression and workspace:
-            self.active_workspace = int(workspace)
-            return
-        if "hl.dsp.window.close" in expression and window:
-            self.clients = [c for c in self.clients
-                            if c["address"] != window.group(1)]
-            if self.active_address == window.group(1):
-                self.active_address = ""
-            return
-        if "hl.dsp.window.move" in expression and window and workspace:
+        if expression.startswith("hl.dsp.window.move(") and window and workspace:
             name = workspace.removeprefix("name:")
             for client in self.clients:
                 if client["address"] == window.group(1):
@@ -217,6 +215,16 @@ class FakeHyprland:
                         "id": int(name) if name.isdigit() else -1,
                         "name": name}
             return
+        # A dispatcher this double does not model is a compositor error, not a
+        # silent ok: a renamed Lua call must fail the test that emits it.
+        raise LookupError(f"unmodelled dispatch: {expression}")
+
+    def _close(self, address: str) -> None:
+        if not address:
+            return
+        self.clients = [c for c in self.clients if c["address"] != address]
+        if self.active_address == address:
+            self.active_address = ""
 
 
 class FakeInputRunner:
@@ -239,6 +247,8 @@ class FakeInputRunner:
         self.responses: dict[str, object] = {}
         self.returncodes: dict[str, int] = {}
         self.stderrs: dict[str, str] = {}
+        self.fail_prefixes: set[str] = set()   # argv starting here fails
+        self.raise_oserror: set[str] = set()   # argv starting here raises
         self.environments: list[dict] = []
         self.inputs: list[Optional[str]] = []
         self.spawned: list[tuple[list[str], Optional[object]]] = []
@@ -265,6 +275,11 @@ class FakeInputRunner:
         self.environments.append(dict(env or {}))
         self.inputs.append(input)
         key = " ".join(argv)
+        if any(key.startswith(prefix) for prefix in self.raise_oserror):
+            raise OSError(5, "Input/output error")
+        if any(key.startswith(prefix) for prefix in self.fail_prefixes):
+            return subprocess.CompletedProcess(argv, 1, stdout="",
+                                               stderr="failed")
         if key in self.returncodes:
             return subprocess.CompletedProcess(
                 argv, self.returncodes[key],

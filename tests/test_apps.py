@@ -4,6 +4,7 @@ import os
 import stat
 import tempfile
 import unittest
+from unittest import mock
 
 from computer_control_cli.apps import Apps, DesktopEntry  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.desktop import Desktop  # pi-lens-ignore: reportMissingImports
@@ -209,6 +210,12 @@ class AppsOpenTests(AppsFixture):
 
         self.assertEqual(caught.exception.code, "app-open-failed")
 
+    def test_open_refuses_a_cwd_for_a_non_terminal_app(self):
+        with self.assertRaises(ControlError) as caught:
+            self.apps.open("Kate", cwd=self.dir)
+
+        self.assertEqual(caught.exception.code, "cwd-unsupported")
+
     def test_open_refuses_a_missing_cwd(self):
         with self.assertRaises(ControlError) as caught:
             self.apps.open("Foot", cwd=os.path.join(self.dir, "nope"))
@@ -272,6 +279,17 @@ class AppsDirTests(AppsFixture):
 
         self.assertTrue(result["created"])
         self.assertTrue(os.path.isdir(target))
+
+    def test_a_directory_that_does_not_appear_refuses(self):
+        target = os.path.join(self.dir, "ghost")
+
+        # makedirs that silently does nothing: the only way to reach the
+        # post-create check without a filesystem race.
+        with mock.patch("computer_control_cli.apps.os.makedirs"), \
+                self.assertRaises(ControlError) as caught:
+            self.apps.dir(target, create=True)
+
+        self.assertEqual(caught.exception.code, "create-not-verified")
 
     def test_a_file_in_the_way_refuses(self):
         target = os.path.join(self.dir, "file.txt")

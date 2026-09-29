@@ -134,7 +134,14 @@ class A11y:
 
     def click_fallback(self, index: int, reply: dict,
                        button: str = "L") -> Outcome:
-        """A pixel click at a window-relative element rect, owner-checked."""
+        """Click the element's reported SCREEN point, owner-checked.
+
+        The bridge asks AT-SPI for screen coordinates, so the frame centre is
+        already absolute: adding the window origin aimed the click at
+        "window origin + element", which is not where the element is. The
+        click is refused unless the point really falls inside the focused
+        window, and unless the element's process IS that window's process.
+        """
         upper = str(button).upper()
         code = KeyMap.BUTTONS.get(upper)
         if code is None:
@@ -144,23 +151,37 @@ class A11y:
         app = str(reply.get("app") or "")
         focused = self.desktop.active()
         focused_class = focused.cls if focused else ""
-        if not self.owner_matches(app, focused_class):
+        if focused is None or not self.owner_matches(app, focused_class):
             raise ControlError(
                 "element-owner-mismatch",
                 f"click --el {index}: the element belongs to "
                 f"{app or 'an unnamed app'} but the focused window is "
-                f"{focused_class or 'unnamed'} — its origin must not aim "
-                "another window's element (re-dump with `a11y`, or click by "
-                "pixels)")
-        origin_x = focused.x if focused else 0
-        origin_y = focused.y if focused else 0
-        x = int(reply.get("x", 0)) + origin_x
-        y = int(reply.get("y", 0)) + origin_y
+                f"{focused_class or 'unnamed'} — focus the app, re-dump with "
+                "`a11y`, or click by pixels")
+        x = int(reply.get("x", 0))
+        y = int(reply.get("y", 0))
+        element_pid = int(reply.get("pid") or 0)
+        if element_pid and focused.pid and element_pid != focused.pid:
+            raise ControlError(
+                "element-owner-mismatch",
+                f"click --el {index}: the element belongs to pid "
+                f"{element_pid} but the focused window is pid {focused.pid} "
+                "— the click would land on another window's pixels")
+        if not (focused.x <= x < focused.x + focused.w
+                and focused.y <= y < focused.y + focused.h):
+            raise ControlError(
+                "element-owner-mismatch",
+                f"click --el {index}: the element reports screen point "
+                f"({x}, {y}), outside the focused "
+                f"{focused.cls or 'window'} at ({focused.x}, {focused.y}) "
+                f"{focused.w}x{focused.h} — a frame outside its own window "
+                "is not a target")
         self.input.warp(x, y)
         self.input.pointer.button(code)
         return Outcome.unverifiable("px", route="px-fallback", element=int(index),
                                     x=x, y=y, role=reply.get("role"),
-                                    name=reply.get("name"), button=upper)
+                                    name=reply.get("name"), pid=element_pid,
+                                    button=upper)
 
     @staticmethod
     def owner_matches(app: str, window_class: str) -> bool:

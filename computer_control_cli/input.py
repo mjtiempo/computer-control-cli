@@ -434,7 +434,8 @@ class Input:
                                f"scroll: AMOUNT must be 1..10000, got {amount}")
         self._aim(x, y, clearmodifiers)
         self.pointer.wheel(direction, amount)
-        return Outcome.unverifiable("pt", direction=direction, amount=amount)
+        return Outcome.unverifiable("input", direction=direction,
+                                    amount=amount)
 
     def _aim(self, x: Optional[int], y: Optional[int],
              clearmodifiers: bool) -> None:

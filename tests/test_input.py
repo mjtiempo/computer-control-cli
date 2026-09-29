@@ -171,6 +171,19 @@ class PointerScrollTests(unittest.TestCase):
         self.assertEqual(runner.calls[-1][0], "python3")
         self.assertIn("range(3)", runner.calls[-1][-1])
 
+    def test_scroll_direction_and_axis_are_pinned(self):
+        pointer_input, runner = make_input()
+
+        pointer_input.scroll("down", 1)
+        down = runner.calls[-1][-1]
+        pointer_input.scroll("right", 1)
+        right = runner.calls[-1][-1]
+
+        self.assertIn("{2: [8]}", down)     # the vertical wheel axis
+        self.assertIn(", -1)", down)        # down is negative
+        self.assertIn("{2: [6]}", right)    # the horizontal wheel axis
+        self.assertIn(", 1)", right)        # right is positive
+
     def test_bad_direction_refuses(self):
         pointer_input, _ = make_input()
 
@@ -413,6 +426,28 @@ class DragTests(unittest.TestCase):
         self.assertTrue(any("EV_KEY" in script and ", 0)" in script
                             for script in scripts))
         self.assertEqual(runner.cursorpos(), "300,200")
+
+    def test_drag_releases_after_the_last_move(self):
+        pointer_input, runner = make_input()
+
+        pointer_input.drag(100, 100, 300, 200, duration_ms=0)
+
+        presses = [index for index, call in enumerate(runner.calls)
+                   if call[0] == "python3" and ", 1)" in call[-1]]
+        moves = [index for index, call in enumerate(runner.calls)
+                 if call[:2] == ["ydotool", "mousemove"]]
+        releases = [index for index, call in enumerate(runner.calls)
+                    if call[0] == "python3" and ", 0)" in call[-1]]
+
+        self.assertTrue(presses, "a drag must press the button")
+        self.assertTrue(releases, "a drag must release the button")
+        press, release = min(presses), min(releases)
+        self.assertLess(press, release, "the press must come first")
+        after_press = [index for index in moves if index > press]
+        self.assertTrue(after_press,
+                        "the pointer must move while the button is down")
+        self.assertLess(max(after_press), release,
+                        "the release must come after the last move")
 
     def test_drag_right_button(self):
         pointer_input, runner = make_input()
