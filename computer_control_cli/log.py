@@ -9,6 +9,7 @@ says so rather than polling it forever.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import time
@@ -112,12 +113,25 @@ class ActionLog:
             if row is not None and self._kept(row, since):
                 entries.append(row)      # complete JSON that lacks its newline
                 pending = ""
-        return entries[-max(1, int(count)):], position, pending, identity
+        count = max(0, int(count))
+        rows = entries[-count:] if count else []
+        return rows, position, pending, identity
 
     @staticmethod
     def _kept(row: dict, since: Optional[str]) -> bool:
-        """Does ``since`` keep this entry?"""
-        return not since or str(row.get("ts", "")) >= str(since)
+        """Does ``since`` keep this entry?
+
+        Timestamps carry a local UTC offset, so they are compared as times:
+        across a DST change the text order is the wrong order.
+        """
+        stamp = str(row.get("ts", ""))
+        if not since:
+            return True
+        try:
+            return (datetime.datetime.fromisoformat(stamp)
+                    >= datetime.datetime.fromisoformat(str(since)))
+        except ValueError:
+            return stamp >= str(since)
 
     def follow(self, count: int = 10, since: Optional[str] = None,
                poll: float = 0.25) -> Iterator[dict]:
@@ -190,6 +204,5 @@ class ActionLog:
 
     @staticmethod
     def timestamp() -> str:
-        import datetime
         return datetime.datetime.now().astimezone().isoformat(
             timespec="milliseconds")

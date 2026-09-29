@@ -1,12 +1,14 @@
 """Tests for AT-SPI element control and the bridge's snapshot logic."""
 
+import io
 import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 
 from computer_control_cli.a11y import A11y  # pi-lens-ignore: reportMissingImports
-from computer_control_cli.atspi_bridge import AtspiBridge, TreeSnapshot  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.atspi_bridge import AtspiBridge, TreeSnapshot, TreeWalker  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.desktop import Desktop  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.input import Input  # pi-lens-ignore: reportMissingImports
@@ -64,6 +66,14 @@ class A11yIndexTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, "atspi")
 
+    def test_index_can_skip_the_snapshot(self):
+        a11y, runner = make_a11y(
+            responses={f"python3 {BRIDGE} index --max 1 --no-save": "[]"})
+
+        a11y.index(max_items=1, snapshot=False)
+
+        self.assertEqual(runner.calls[-1][3:], ["--max", "1", "--no-save"])
+
 
 class A11yClickTests(unittest.TestCase):
     def test_ax_route_invokes_the_action(self):
@@ -87,6 +97,17 @@ class A11yClickTests(unittest.TestCase):
             a11y.click_element(0)
 
         self.assertEqual(caught.exception.code, "atspi")
+
+    def test_ax_route_refuses_a_button_it_cannot_use(self):
+        a11y, _ = make_a11y(responses={
+            f"python3 {BRIDGE} click 0": json.dumps(
+                {"ok": True, "route": "ax", "action": "press",
+                 "role": "push button", "name": "Save"})})
+
+        with self.assertRaises(ControlError) as caught:
+            a11y.click_element(0, button="R")
+
+        self.assertEqual(caught.exception.code, "bad-args")
 
     def test_px_fallback_warps_and_clicks(self):
         a11y, runner = make_a11y(responses={
@@ -235,6 +256,91 @@ class BridgeArgvTests(unittest.TestCase):
 
     def test_click_without_an_index_is_an_error(self):
         self.assertEqual(AtspiBridge.main(["click"]), 1)
+
+
+class FakeNode:
+    """One AT-SPI node: just enough of the accessible interface to walk."""
+
+    def __init__(self, name="", role="", children=(), actions=()):
+        self.name = name
+        self.role = role
+        self.children = list(children)
+        self.actions = list(actions)
+
+    def get_name(self):
+        return self.name
+
+    def get_role_name(self):
+        return self.role
+
+    def get_child_count(self):
+        return len(self.children)
+
+    def get_child_at_index(self, index):
+        return self.children[index]
+
+    def get_value_iface(self):
+        return None
+
+    def get_n_actions(self):
+        return len(self.actions)
+
+    def get_action_name(self, index):
+        return self.actions[index]
+
+    def get_state_set(self):
+        return None
+
+    def get_component_iface(self):
+        return None
+
+
+class FakeAtspi:
+    """The Atspi module double: ``get_desktop`` and the two enums are all
+    the walker reads from the library."""
+
+    class StateType:
+        ENABLED = "enabled"
+        SELECTED = "selected"
+
+    class CoordType:
+        SCREEN = "screen"
+
+    def __init__(self, desktop):
+        self.desktop = desktop
+
+    def get_desktop(self, index):
+        return self.desktop
+
+
+class TreeWalkerTests(unittest.TestCase):
+    """The walk's row space: the app filter must run before the cap."""
+
+    def tearDown(self):
+        TreeWalker._ATSPI = None
+
+    @staticmethod
+    def node(name: str, children=(), actions=("press",)):
+        return FakeNode(name=name, role="push button", children=children,
+                        actions=actions)
+
+    def test_the_app_filter_is_applied_before_the_cap(self):
+        other = FakeNode(name="other", role="application", children=[
+            self.node("one"), self.node("two"), self.node("three")])
+        nautilus = FakeNode(name="nautilus", role="application", children=[
+            self.node("Files"), self.node("Home")])
+        TreeWalker._ATSPI = FakeAtspi(
+            FakeNode(children=[other, nautilus]))
+        stdout = io.StringIO()
+
+        with redirect_stdout(stdout):
+            code = AtspiBridge(["index", "--app", "nautilus", "--max", "2",
+                                "--no-save"]).index()
+
+        self.assertEqual(code, 0)
+        rows = json.loads(stdout.getvalue())
+        self.assertEqual([row["app"] for row in rows],
+                         ["nautilus", "nautilus"])
 
 
 if __name__ == "__main__":

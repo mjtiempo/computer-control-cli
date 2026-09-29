@@ -137,7 +137,7 @@ class Audit:
             log.add("a11y", True, False, "skipped (--no-a11y)")
             return {"skipped": True}
         try:
-            rows = self.a11y.index(max_items=1)
+            rows = self.a11y.index(max_items=1, snapshot=False)
             log.add("a11y", True, False, f"{len(rows)} row(s), capped at 1")
             return {"ok": True, "rows": len(rows)}
         except ControlError as error:

@@ -101,6 +101,12 @@ class WindowTests(unittest.TestCase):
     def test_malformed_rows_contribute_no_window(self):
         self.assertIsNone(Window.from_hypr([]))
 
+    def test_an_empty_reply_is_no_window(self):
+        self.assertIsNone(Window.from_hypr({}))
+
+    def test_a_row_without_an_address_is_no_window(self):
+        self.assertIsNone(Window.from_hypr({"address": "", "class": "foot"}))
+
 
 class WindowSpecTests(unittest.TestCase):
     WINDOW = cast(Window, Window.from_hypr(WindowTests.RAW))

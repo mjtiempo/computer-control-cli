@@ -222,7 +222,7 @@ class Desktop:
         wanted = str(workspace).strip()
         self.session.dispatch(
             f'hl.dsp.window.move({{ window = "address:{window.address}", '
-            f'workspace = "{wanted}" }})')
+            f'workspace = {Session.lua_string(wanted)} }})')
         wanted_row = wanted.removeprefix("name:")
 
         def is_there() -> bool:
@@ -313,6 +313,7 @@ class Desktop:
         needle_class = str(klass).lower()
         wanted = max(1, int(stable))
         streak = 0
+        address = ""            # the address the streak is about
         deadline = time.time() + max(0.0, float(timeout))
         while True:
             rows = self.matching(spec) if spec else self.windows()
@@ -324,8 +325,18 @@ class Desktop:
                 rows = [w for w in rows if needle_title in w.title.lower()]
             if needle_class:
                 rows = [w for w in rows if needle_class in w.cls.lower()]
-            satisfied = not rows if gone else bool(rows)
-            streak = streak + 1 if satisfied else 0
+            if spec and not gone and len(rows) > 1:
+                raise ControlError(
+                    "ambiguous-window",
+                    f"wait-window: {len(rows)} windows match {spec!r} — "
+                    "narrow it with --class/--title/--exclude")
+            if gone:
+                streak = streak + 1 if not rows else 0
+            else:
+                found = rows[0].address.lower() if rows else ""
+                if found != address:
+                    address, streak = found, 0
+                streak = streak + 1 if found else 0
             if streak >= wanted:
                 if gone:
                     return Outcome.confirmed("poll", gone=True, stable=streak)

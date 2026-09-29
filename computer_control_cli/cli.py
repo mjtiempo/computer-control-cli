@@ -258,6 +258,7 @@ class Cli:
         self.dry_run = False
         self.default_timeout = 15.0
         self.interrupted = False
+        self.failed_checks = False      # audit: rows print, the exit says 1
         self.build_services()
 
     # --------------------------------------------------------------- wiring
@@ -316,7 +317,11 @@ class Cli:
         return self.a11y.enable()
 
     def cmd_audit(self, args) -> Any:
-        return self.audit.audit(no_probe=args.no_probe, no_a11y=args.no_a11y)
+        result = self.audit.audit(no_probe=args.no_probe,
+                                  no_a11y=args.no_a11y)
+        if not result["ok"]:
+            self.failed_checks = True   # the rows still print; the exit says 1
+        return result
 
     def cmd_log(self, args) -> Any:
         if args.follow:
@@ -494,6 +499,10 @@ class Cli:
 
     def cmd_clipboard(self, args) -> Any:
         primary = bool(getattr(args, "primary", False))
+        if args.out and args.mode != "get":
+            raise ControlError(
+                "bad-args",
+                f"clipboard {args.mode}: --out is only for clipboard get")
         if args.mode == "types":
             return self.system.clipboard_types(primary)
         if args.mode == "get":
@@ -613,8 +622,9 @@ class Cli:
                 self.build_services(args.instance, args.display)
             except ControlError as error:
                 verb = str(getattr(args, "verb", "") or "target")
-                self.log.write(verb, ok=False, args=list(self._argv),
-                               code=error.code, detail=error.message)
+                self.log.write(verb, ok=False, args=self.log_args(verb),
+                               code=error.code, detail=error.message,
+                               text=self.log_text(verb, args))
                 return self.report(error)
         verb = str(getattr(args, "verb", "") or "")
         handler = getattr(self, "cmd_" + verb.replace("-", "_"), None) \
@@ -638,9 +648,13 @@ class Cli:
             return self.report(error)
         if self.interrupted:
             return 130                      # Ctrl+C: not a clean success
-        self.log.write(verb, ok=True, args=self.log_args(verb),
+        self.log.write(verb, ok=not self.failed_checks,
+                       args=self.log_args(verb),
                        text=self.log_text(verb, args))
-        return self.present(result)
+        status = self.present(result)
+        if self.failed_checks and not status:
+            return 1                        # rows printed; the run still failed
+        return status
 
     def apply_globals(self, args) -> None:
         """Take every global flag the parsed namespace carries.
@@ -731,7 +745,39 @@ class Cli:
         """The argv to record — the text of a secret-adjacent verb is dropped."""
         if verb in ("type", "clipboard"):
             return self._argv[:1]
+        if verb == "sequence":
+            return self.sequence_args()
         return list(self._argv)
+
+    def sequence_args(self) -> list:
+        """A batch's argv with each step's typed text replaced.
+
+        A ``sequence`` secret lives inside its JSON step array, not in the
+        outer argv, so keying redaction on the outer verb alone stored it.
+        """
+        argv = list(self._argv)
+        for position, word in enumerate(argv):
+            try:
+                steps = json.loads(word)
+            except ValueError:
+                continue
+            if not isinstance(steps, list):
+                continue
+            argv[position] = json.dumps(
+                [self.redact_step(step) for step in steps])
+            break
+        return argv
+
+    @staticmethod
+    def redact_step(step: Any) -> Any:
+        """One sequence step, with the text after a secret-adjacent verb cut."""
+        if not isinstance(step, list):
+            return step
+        words = [str(word) for word in step]
+        for position, word in enumerate(words):
+            if word in ("type", "clipboard"):
+                return words[:position + 1] + ["<redacted>"]
+        return words
 
     def log_text(self, verb: str, args) -> Optional[str]:
         if verb == "type":

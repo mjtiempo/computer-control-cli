@@ -17,7 +17,7 @@ pick a row, tell the CLI to act on it.
 computer-control a11y                          # JSON rows for every app the session exposes
 computer-control a11y --app nautilus --max 50  # filter by application substring, cap the row count
 computer-control a11y-enable                   # turn the session's AT-SPI flag on, read it back
-computer-control click --el 17                 # act on row 17 (right-click: --button R)
+computer-control click --el 17                 # act on row 17 (the element's default action)
 ```
 
 A row looks like:
@@ -69,7 +69,10 @@ move is to fall back to pixels (`computer-control-screen` +
    pixels yourself.
 
 `click --el` does not take `--double` (AT-SPI has no double-click action) —
-that combination is `bad-args`; double-click by pixels instead.
+that combination is `bad-args`; double-click by pixels instead. `--button`
+is a px-fallback option too: the AT-SPI route only ever invokes the
+element's default action, so `--button R` on an element refuses `bad-args`
+rather than reporting a click it did not make.
 
 ## Recipe: act on a named control
 

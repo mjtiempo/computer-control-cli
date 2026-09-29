@@ -59,13 +59,21 @@ class A11y:
         return (proc.stdout or "").strip()
 
     def index(self, app: Optional[str] = None,
-              max_items: Optional[int] = None) -> list:
-        """The element rows; ``index`` is the FULL walk's position."""
+              max_items: Optional[int] = None,
+              snapshot: bool = True) -> list:
+        """The element rows; ``index`` is the FULL walk's position.
+
+        ``snapshot=False`` leaves the dump that ``click --el`` resolves
+        against untouched, so a caller that reads for its own answer (the
+        audit) cannot renumber another caller's elements.
+        """
         extra: list = []
         if app:
             extra += ["--app", str(app)]
         if max_items is not None:
             extra += ["--max", str(int(max_items))]
+        if not snapshot:
+            extra += ["--no-save"]
         text = self.run("index", extra)
         try:
             rows = json.loads(text) if text else []
@@ -103,6 +111,12 @@ class A11y:
             raise ControlError("atspi", f"click --el {index}: bad reply")
         route = reply.get("route")
         if route == "ax":
+            if str(button).upper() != "L":
+                raise ControlError(
+                    "bad-args",
+                    f"click --el {index}: the AT-SPI route only invokes the "
+                    f"element's default action — --button {button} is a px "
+                    "fallback option")
             if not reply.get("ok"):
                 raise ControlError(
                     "atspi",

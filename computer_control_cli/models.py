@@ -105,6 +105,9 @@ class Window:
     def from_hypr(cls, raw: Any) -> Optional["Window"]:
         if not isinstance(raw, dict):
             return None
+        address = Coerce.as_str(raw.get("address"))
+        if not address:
+            return None          # hyprctl's empty reply: nothing is focused
         workspace = raw.get("workspace")
         workspace_id = -1
         if isinstance(workspace, dict):
@@ -112,7 +115,7 @@ class Window:
         x, y = Coerce.pair(raw.get("at"))
         w, h = Coerce.pair(raw.get("size"))
         return cls(
-            address=Coerce.as_str(raw.get("address")),
+            address=address,
             title=Coerce.as_str(raw.get("title")),
             cls=Coerce.as_str(raw.get("class")),
             workspace=workspace_id,

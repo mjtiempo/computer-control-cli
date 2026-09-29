@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import struct
 import time
 from typing import Optional
@@ -115,9 +116,17 @@ class Screen:
 
     @staticmethod
     def _prune(directory: str, prefix: str, keep: int) -> None:
+        """Delete the oldest captures THIS tool wrote, and only those.
+
+        The name is the only proof of ownership there is:
+        ``{prefix}_<ms>.png``. A bare glob also matches a picture the user
+        put in ``--out`` (``screen_desktop.png``, say) and deletes it.
+        """
+        mine = re.compile(rf"{re.escape(prefix)}_\d+\.png\Z")
         try:
             pattern = os.path.join(directory, f"{prefix}_*.png")
-            files = sorted(glob.glob(pattern),
+            files = sorted((path for path in glob.glob(pattern)
+                            if mine.match(os.path.basename(path))),
                            key=lambda path: os.path.getmtime(path))
         except OSError:
             return

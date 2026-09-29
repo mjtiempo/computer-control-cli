@@ -319,6 +319,32 @@ class CliInputTests(CliFixture):
         self.assertEqual(code, 1)
         self.assertIn("ERR[no-file]", stderr)
 
+    def test_clipboard_types_refuses_an_out_it_cannot_use(self):
+        target = os.path.join(self._tmp.name, "types.bin")
+
+        code, _, stderr = self.run_cli("clipboard", "types", "--out", target)
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[bad-args]", stderr)
+
+    def test_log_zero_prints_no_entries(self):
+        self.run_json("type", "hi")
+
+        code, stdout, _ = self.run_cli("log", "0")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(stdout), [])
+
+    def test_click_el_refuses_a_button_the_ax_route_cannot_use(self):
+        self.runner.responses[f"python3 {A11y.bridge_path()} click 0"] = \
+            json.dumps({"ok": True, "route": "ax", "action": "press",
+                        "role": "push button", "name": "Save"})
+
+        code, _, stderr = self.run_cli("click", "--el", "0", "--button", "R")
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[bad-args]", stderr)
+
     def test_click_el_px_fallback(self):
         self.runner.responses[f"python3 {A11y.bridge_path()} click 0"] = \
             json.dumps({"ok": True, "route": "px-fallback", "x": 10,
@@ -347,6 +373,15 @@ class CliInputTests(CliFixture):
         entry = json.loads(stdout)[0]
         self.assertNotIn("text", entry)
         self.assertEqual(entry["text_chars"], 7)
+
+    def test_sequence_does_not_log_typed_text(self):
+        self.run_json("sequence", json.dumps([["type", "hunter2"]]))
+
+        code, stdout, _ = self.run_cli("log", "1")
+        entry = json.loads(stdout)[0]
+        self.assertEqual(entry["action"], "sequence")
+        self.assertNotIn("hunter2", json.dumps(entry))
+        self.assertIn("<redacted>", json.dumps(entry))
 
 
 class CliA11yTests(CliFixture):
@@ -409,6 +444,20 @@ class CliAuditTests(CliFixture):
         self.assertIn("tools", result["capabilities"])
         self.assertEqual(result["capabilities"]["logical_screen"],
                          [1920, 1080])
+
+    def test_a_critical_failure_exits_1_with_the_rows_intact(self):
+        session = Session(env=None, runner=FakeInputRunner(FakeHyprland()),
+                          discoverer=FakeDiscoverer(None))
+        stdout, stderr = io.StringIO(), io.StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = Cli(["audit", "--no-probe", "--no-a11y"], session=session,
+                       config=self.config).run()
+
+        self.assertEqual(code, 1)
+        rows = json.loads(stdout.getvalue())
+        self.assertFalse(rows["ok"])
+        self.assertIn("session", rows["critical_failed"])
 
 
 class CliGlobalTests(CliFixture):

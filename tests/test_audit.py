@@ -106,7 +106,7 @@ class AuditTests(unittest.TestCase):
         self.assertNotIn("calibration", result["critical_failed"])
 
     def test_a11y_failure_is_a_warning_not_a_refusal(self):
-        index_key = f"python3 {A11y.bridge_path()} index --max 1"
+        index_key = f"python3 {A11y.bridge_path()} index --max 1 --no-save"
         audit, _ = make_audit(responses={GRIM: png(1920, 1080)},
                               returncodes={index_key: 1},
                               stderrs={index_key: "Traceback\n"})

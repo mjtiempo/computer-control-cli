@@ -115,6 +115,17 @@ class ActionLogTests(unittest.TestCase):
 
         self.assertEqual(actions, ["two"])
 
+    def test_since_compares_offsets_as_times_not_text(self):
+        # 02:15+01:00 is 01:15Z: AFTER 02:30+02:00 (00:30Z), though it sorts
+        # before it as text — the DST change reverses the string order.
+        later = {"ts": "2025-10-26T02:15:00+01:00"}
+        earlier = {"ts": "2025-10-26T02:15:00+02:00"}
+
+        self.assertTrue(ActionLog._kept(later,
+                                        "2025-10-26T02:30:00+02:00"))
+        self.assertFalse(ActionLog._kept(earlier,
+                                         "2025-10-26T02:30:00+01:00"))
+
     def test_render_is_one_line_per_entry(self):
         lines = ActionLog.render([
             {"ts": "2026-01-01T00:00:00", "action": "move", "ok": True},

@@ -127,6 +127,7 @@ class FakeHyprland:
         self.active_address = self.clients[0]["address"] if self.clients else ""
         self.cursor = cursor
         self.honor_dispatches = True
+        self.empty_active = False       # hyprctl answers {} when none is focused
         self.dispatch_log: list[str] = []
         self.spawn_on_exec: list[dict] = []
         self.calls: list[list[str]] = []
@@ -160,7 +161,8 @@ class FakeHyprland:
         if args[:2] == ["-j", "clients"]:
             return json.dumps(self.clients)
         if args[:2] == ["-j", "activewindow"]:
-            return json.dumps(self._active_client())
+            return "{}" if self.empty_active else json.dumps(
+                self._active_client())
         if args[:2] == ["-j", "activeworkspace"]:
             row = next((w for w in self.workspaces
                         if w["id"] == self.active_workspace), None)
@@ -182,10 +184,16 @@ class FakeHyprland:
         return "ok"
 
     def _apply(self, expression: str) -> None:
-        workspace = re.search(r'workspace = "?([^",})]+)"?', expression)
+        quoted = re.search(r'workspace = "((?:[^"\\]|\\.)*)"', expression)
+        bare = re.search(r"workspace = (\d+)", expression)
+        workspace = ""
+        if quoted:
+            workspace = json.loads(f'"{quoted.group(1)}"')
+        elif bare:
+            workspace = bare.group(1)
         window = re.search(r'window = "address:(0x[0-9a-fA-F]+)"', expression)
 
-        if "hl.dsp.exec_cmd" in expression:
+        if expression.startswith("hl.dsp.exec_cmd("):
             for client in self.spawn_on_exec:
                 self.clients.append(dict(client))
             return
@@ -193,7 +201,7 @@ class FakeHyprland:
             self.active_address = window.group(1)
             return
         if "hl.dsp.focus" in expression and workspace:
-            self.active_workspace = int(workspace.group(1))
+            self.active_workspace = int(workspace)
             return
         if "hl.dsp.window.close" in expression and window:
             self.clients = [c for c in self.clients
@@ -202,10 +210,12 @@ class FakeHyprland:
                 self.active_address = ""
             return
         if "hl.dsp.window.move" in expression and window and workspace:
+            name = workspace.removeprefix("name:")
             for client in self.clients:
                 if client["address"] == window.group(1):
-                    client["workspace"] = {"id": int(workspace.group(1)),
-                                           "name": workspace.group(1)}
+                    client["workspace"] = {
+                        "id": int(name) if name.isdigit() else -1,
+                        "name": name}
             return
 
 

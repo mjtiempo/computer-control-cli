@@ -60,6 +60,13 @@ class DesktopReadTests(unittest.TestCase):
 
         self.assertIsNone(desktop.active())
 
+    def test_an_empty_activewindow_reply_is_none(self):
+        hypr = FakeHyprland(clients=[dict(c) for c in CLIENTS])
+        hypr.empty_active = True
+        desktop, _ = make_desktop(hypr)
+
+        self.assertIsNone(desktop.active())
+
     def test_workspaces(self):
         desktop, _ = make_desktop()
 
@@ -220,6 +227,24 @@ class DesktopMoveTests(unittest.TestCase):
         moved = next(c for c in hypr.clients if c["address"] == "0xbbb2")
         self.assertEqual(moved["workspace"]["id"], 1)
 
+    def test_the_workspace_is_escaped_into_the_lua(self):
+        desktop, hypr = make_desktop()
+        payload = '1") ; hl.dsp.exec_cmd("id") ; --'
+
+        desktop.move_window("class:kate", payload)
+
+        expression = hypr.dispatch_log[-1]
+        self.assertNotIn(payload, expression)
+        self.assertIn(r'workspace = "1\") ; hl.dsp.exec_cmd(\"id\") ; --"',
+                      expression)
+
+    def test_move_window_accepts_a_named_workspace(self):
+        desktop, _ = make_desktop()
+
+        result = desktop.move_window("class:kate", "name:web")
+
+        self.assertTrue(result.verified)
+
     def test_move_that_did_not_take_refuses(self):
         hypr = FakeHyprland(clients=[dict(c) for c in CLIENTS])
         hypr.honor_dispatches = False
@@ -328,6 +353,36 @@ class DesktopWaitTests(unittest.TestCase):
             desktop.wait("class:foot", timeout=0, stable=3)
 
         self.assertEqual(result.details["stable"], 3)
+
+    def test_two_matches_refuse_instead_of_picking_one(self):
+        hypr = FakeHyprland(clients=[dict(c) for c in CLIENTS])
+        hypr.clients.append({"address": "0xddd4", "title": "foot 2",
+                             "class": "foot",
+                             "workspace": {"id": 1, "name": "1"},
+                             "at": [0, 0], "size": [100, 100],
+                             "mapped": True, "fullscreen": 0,
+                             "floating": False, "pid": 44})
+        desktop, _ = make_desktop(hypr)
+
+        with self.assertRaises(ControlError) as caught:
+            desktop.wait("class:foot", timeout=0)
+
+        self.assertEqual(caught.exception.code, "ambiguous-window")
+
+    def test_gone_is_not_ambiguous(self):
+        hypr = FakeHyprland(clients=[dict(c) for c in CLIENTS])
+        hypr.clients.append({"address": "0xddd4", "title": "foot 2",
+                             "class": "foot",
+                             "workspace": {"id": 1, "name": "1"},
+                             "at": [0, 0], "size": [100, 100],
+                             "mapped": True, "fullscreen": 0,
+                             "floating": False, "pid": 44})
+        desktop, _ = make_desktop(hypr)
+
+        with self.assertRaises(ControlError) as caught:
+            desktop.wait("class:foot", gone=True, timeout=0)
+
+        self.assertEqual(caught.exception.code, "wait-timeout")
 
     def test_wait_without_a_spec_matches_any_window(self):
         desktop, _ = make_desktop()

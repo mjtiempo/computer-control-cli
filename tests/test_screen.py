@@ -118,6 +118,21 @@ class ScreenSaveTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, "capture")
 
+    def test_prune_leaves_png_files_it_did_not_write(self):
+        foreign = os.path.join(self.dir, "screen_desktop.png")
+        first = os.path.join(self.dir, "screen_1000.png")
+        second = os.path.join(self.dir, "screen_2000.png")
+        for path, when in ((foreign, 1), (first, 2), (second, 3)):
+            with open(path, "wb") as handle:
+                handle.write(png(10, 10))
+            os.utime(path, (when, when))
+
+        Screen._prune(self.dir, "screen", keep=2)
+
+        self.assertEqual(sorted(os.listdir(self.dir)),
+                         ["screen_1000.png", "screen_2000.png",
+                          "screen_desktop.png"])
+
 
 class ScreenWindowAndMonitorTests(unittest.TestCase):
     def test_capture_window_uses_its_rect(self):

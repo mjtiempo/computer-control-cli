@@ -189,7 +189,14 @@ class TreeWalker:
         return True
 
     @classmethod
-    def walk_all(cls, max_rows: int, with_accs: bool = False) -> tuple:
+    def walk_all(cls, max_rows: int, with_accs: bool = False,
+                 app_filter: str = "") -> tuple:
+        """Walk every app; ``app_filter`` narrows BEFORE ``max_rows`` bites.
+
+        The cap used to be spent by whichever app the desktop enumerated
+        first, so ``--app`` could answer "no elements" for an app that has
+        them. The filter belongs where the rows are counted.
+        """
         Atspi = cls.atspi()
         desktop = Atspi.get_desktop(0)
         rows: list = []
@@ -198,8 +205,10 @@ class TreeWalker:
             app = desktop.get_child_at_index(index)
             if app is None:
                 continue
-            cls.walk(app.get_name() or "?", app, rows, max_rows,
-                     accs if with_accs else None)
+            name = app.get_name() or "?"
+            if app_filter and app_filter not in name.lower():
+                continue
+            cls.walk(name, app, rows, max_rows, accs if with_accs else None)
             if len(rows) >= max_rows:
                 break
         return rows, accs
@@ -231,18 +240,15 @@ class AtspiBridge:
             sys.stderr.write("--max needs an integer\n")
             return 1
         try:
-            rows, _ = TreeWalker.walk_all(max_rows)
+            rows, _ = TreeWalker.walk_all(
+                max_rows, app_filter=(app_filter or "").lower())
         except Exception as error:                       # noqa: BLE001
             sys.stderr.write(f"atspi walk failed: {error}\n")
             return 1
-        if not TreeSnapshot.save(rows):
+        if "--no-save" not in self.argv and not TreeSnapshot.save(rows):
             sys.stderr.write("ERR[stale-tree]: cannot write the dump snapshot "
                              "— `click --el` could not resolve it\n")
             return 3
-        if app_filter:
-            needle = app_filter.lower()
-            rows = [row for row in rows
-                    if needle in str(row.get("app") or "").lower()]
         sys.stdout.write(json.dumps(rows[:max_rows]))
         sys.stdout.write("\n")
         return 0
