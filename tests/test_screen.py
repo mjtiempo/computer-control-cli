@@ -1,9 +1,9 @@
 """Tests for screen capture: PNG bytes, logical-size regions, opt-in saving."""
 
 import os
+import stat
 import struct
 import tempfile
-import time
 import unittest
 
 from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
@@ -117,6 +117,15 @@ class ScreenSaveTests(unittest.TestCase):
             screen.save(b"not a png", self.dir)
 
         self.assertEqual(caught.exception.code, "capture")
+
+    def test_a_capture_is_private(self):
+        screen, _ = make_screen()
+
+        result = screen.save(png(10, 10), self.dir)
+
+        mode = stat.S_IMODE(os.stat(result["path"]).st_mode)
+        self.assertEqual(mode, 0o600,
+                         "a desktop capture is not world-readable")
 
     def test_prune_leaves_png_files_it_did_not_write(self):
         foreign = os.path.join(self.dir, "screen_desktop.png")

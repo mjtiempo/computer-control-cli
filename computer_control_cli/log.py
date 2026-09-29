@@ -49,9 +49,16 @@ class ActionLog:
         try:
             directory = os.path.dirname(self.path())
             if directory:
-                os.makedirs(directory, exist_ok=True)
-            with open(self.path(), "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(entry, separators=(",", ":")) + "\n")
+                os.makedirs(directory, mode=0o700, exist_ok=True)
+            payload = json.dumps(entry, separators=(",", ":")) + "\n"
+            # 0600 and no symlink following: the log records window titles,
+            # paths and when the user acted — it is nobody else's business,
+            # and a log write is a poor redirect target.
+            fd = os.open(self.path(),
+                         os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+                         0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as handle:
+                handle.write(payload)
         except OSError:
             pass  # fail-open: the log must never fail the action
 
@@ -94,8 +101,14 @@ class ActionLog:
         ``follow``'s buffer and not to the backlog, or finishing that line
         would emit only its second half.
         """
+        path = self.path()
+        if os.path.exists(path) and not os.path.isfile(path):
+            raise ControlError(
+                "no-file",
+                f"log: {path!r} is not a regular file — a character device "
+                "or a directory cannot be tailed")
         try:
-            with open(self.path(), "rb") as handle:
+            with open(path, "rb") as handle:
                 data = handle.read()
                 position = handle.tell()
                 identity = os.fstat(handle.fileno()).st_ino

@@ -39,7 +39,10 @@ computer-control drag 300 300 900 600 --duration 600  # press, move, release (re
   come from `monitors`, `state` or a capture, not from guesswork.
 - `drag` moves in 12 interpolated steps over `--duration` ms (default 300)
   and releases the button in a `finally`, so a failed move cannot leave the
-  button stuck down.
+  button stuck down. It also verifies the pointer actually reached the end
+  point: a drag the absolute device range or a monitor edge clamps refuses
+  `drag-not-verified` (the button is still released) instead of reporting
+  coordinates it never reached. Drag within one monitor.
 
 ## Keyboard
 

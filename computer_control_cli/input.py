@@ -524,6 +524,13 @@ class Input:
                     int(round(start_y + (end_y - start_y) * fraction)))
                 if duration_ms:
                     time.sleep(max(0.0, float(duration_ms)) / 1000.0 / steps)
+            landed = self.pointer.position()
+            if self._offset(landed, (end_x, end_y)) > POINTER_TOLERANCE_PX:
+                raise ControlError(
+                    "drag-not-verified",
+                    f"drag: the pointer landed at {landed} after dragging to "
+                    f"({end_x}, {end_y}) — the drag never reached its target "
+                    "(an absolute device range or a monitor edge clamps it)")
         finally:
             self.pointer.release(code)
         return Outcome.unverifiable("px", button=upper, x1=start_x, y1=start_y,

@@ -18,6 +18,7 @@ computer-control a11y                          # JSON rows for every app the ses
 computer-control a11y --app nautilus --max 50  # filter by application substring, cap the row count
 computer-control a11y-enable                   # turn the session's AT-SPI flag on, read it back
 computer-control click --el 17                 # act on row 17 (the element's default action)
+computer-control click --el 17 --dump 3f2a1b9c  # pinned to the dump you read
 ```
 
 A row looks like:
@@ -25,14 +26,20 @@ A row looks like:
 ```json
 {"index":17,"app":"org.gnome.Nautilus","role":"push button",
  "name":"Open","value":null,"enabled":true,"selected":false,
- "actions":["click"],"frame":[12,36,96,28]}
+ "actions":["click"],"frame":[12,36,96,28],"pid":4242,"dump":"3f2a1b9c"}
 ```
 
 - `index` is the position in the **full** walk, and it is what `--el` takes —
   even when `--max` or `--app` hid some rows from the dump you read.
-- `actions` is what the element can do; `frame` is its rect **relative to its
-  window** (Wayland AT-SPI extents are window-relative; the CLI adds the
-  focused window's origin itself).
+- `dump` is the id of the element space you just read (a hash of the ordered
+  identities). `click --el N` resolves N against the **newest** dump, so pass
+  `--dump <id>` to pin it: the click then refuses `stale-tree` if any other
+  `a11y` run replaced that dump in between.
+- `pid` is the process the element belongs to, and the px fallback refuses to
+  click when it is not the focused window's process.
+- `actions` is what the element can do; `frame` is its **screen** rect
+  (AT-SPI reports screen coordinates; the CLI clicks that point directly and
+  refuses when it falls outside the focused window).
 - `[]` is a **true answer**: nothing on this desktop exposes a tree. It is
   not a failure and not a reason to retry.
 

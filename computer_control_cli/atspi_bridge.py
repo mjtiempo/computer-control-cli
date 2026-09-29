@@ -21,6 +21,7 @@ not send the click to a neighbour. A gone element refuses
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -50,6 +51,19 @@ class TreeSnapshot:
         """The stable identity of one dump row: (role, name, actions)."""
         return (row.get("role", ""), row.get("name", ""),
                 tuple(row.get("actions") or []))
+
+    @classmethod
+    def digest(cls, rows: list[dict]) -> str:
+        """A short id for a dump: its identities, in order.
+
+        ``click --el N`` indexes into this list, so the id has to cover the
+        whole ordered sequence of ``(role, name, actions)``: two dumps share
+        an id only when N means the same element in both, which is what lets
+        a caller pin the click to the dump it actually read.
+        """
+        blob = json.dumps([cls.identity(row) for row in rows],
+                          separators=(",", ":"))
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:8]
 
     @classmethod
     def save(cls, rows: list[dict], path: Optional[str] = None) -> bool:
@@ -255,6 +269,9 @@ class AtspiBridge:
             sys.stderr.write("ERR[stale-tree]: cannot write the dump snapshot "
                              "— `click --el` could not resolve it\n")
             return 3
+        digest = TreeSnapshot.digest(rows)
+        for row in rows:
+            row["dump"] = digest
         sys.stdout.write(json.dumps(rows[:max_rows]))
         sys.stdout.write("\n")
         return 0
@@ -272,6 +289,14 @@ class AtspiBridge:
         if stored is None:
             sys.stderr.write("ERR[stale-tree]: no a11y dump yet "
                              "(run `a11y` first)\n")
+            return 3
+        current = TreeSnapshot.digest(stored)
+        asked = self.flag(self.argv, "--dump")
+        if asked and asked != current:
+            sys.stderr.write(
+                f"ERR[stale-tree]: you read dump {asked} but the current dump "
+                f"is {current} — the element numbering changed; re-run `a11y` "
+                "and re-pick\n")
             return 3
         wanted = TreeSnapshot.target(stored, target)
         if wanted is None:
@@ -301,6 +326,7 @@ class AtspiBridge:
             TreeSnapshot.save(rows)
             sys.stdout.write(json.dumps({
                 "ok": bool(ok), "route": "ax", "action": row["actions"][0],
+                "dump": current,
                 "role": row["role"], "name": row["name"]}))
             sys.stdout.write("\n")
             return 0
@@ -310,6 +336,7 @@ class AtspiBridge:
                 "ok": True, "route": "px-fallback",
                 "x": x + w // 2, "y": y + h // 2, "app": row["app"],
                 "pid": row.get("pid", 0),
+                "dump": current,
                 "role": row["role"], "name": row["name"]}))
             sys.stdout.write("\n")
             return 0

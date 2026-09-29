@@ -285,7 +285,9 @@ class DesktopCloseAppsTests(unittest.TestCase):
 
         result = desktop.close_apps("terminal", dry_run=True)
 
-        self.assertEqual(result.details["count"], 1)
+        self.assertEqual(result["count"], 1)
+        self.assertTrue(result["dry_run"])
+        self.assertNotIn("ok", result, "a plan is not a failure")
         self.assertEqual(len(hypr.clients), 3)
 
     def test_closes_every_window_of_a_kind(self):

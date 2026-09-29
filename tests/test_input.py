@@ -449,6 +449,18 @@ class DragTests(unittest.TestCase):
         self.assertLess(max(after_press), release,
                         "the release must come after the last move")
 
+    def test_a_drag_that_cannot_reach_its_target_refuses_and_releases(self):
+        pointer_input, runner = make_input()
+
+        with self.assertRaises(ControlError) as caught:
+            pointer_input.drag(10, 10, 5000, 5000, duration_ms=0)
+
+        self.assertEqual(caught.exception.code, "drag-not-verified")
+        scripts = [call[-1] for call in runner.calls if call[0] == "python3"]
+        self.assertTrue(any("EV_KEY" in script and ", 0)" in script
+                            for script in scripts),
+                        "the button must be released even when the drag fails")
+
     def test_drag_right_button(self):
         pointer_input, runner = make_input()
 

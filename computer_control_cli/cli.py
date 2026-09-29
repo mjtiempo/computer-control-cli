@@ -203,6 +203,9 @@ class ParserBuilder:
         click.add_argument("--button", default="L")
         click.add_argument("--double", action="store_true")
         click.add_argument("--el", type=int, default=None)
+        click.add_argument("--dump", default="",
+                           help="pin an --el click to the dump id `a11y` "
+                                "printed")
         self.clearmodifier_flags(click)
         scroll = self.verb("scroll", "scroll at the pointer or at X Y")
         scroll.add_argument("direction")
@@ -473,7 +476,7 @@ class Cli:
                     "double-click action); click by pixels instead")
             if args.clearmodifiers:
                 self.input.clear_modifiers()
-            return self.a11y.click_element(args.el, args.button)
+            return self.a11y.click_element(args.el, args.button, args.dump)
         return self.input.click(args.x, args.y, args.button, args.double,
                                 args.clearmodifiers)
 

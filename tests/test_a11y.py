@@ -110,6 +110,18 @@ class A11yClickTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, "bad-args")
 
+    def test_click_element_pins_the_dump(self):
+        a11y, runner = make_a11y(responses={
+            f"python3 {BRIDGE} click 0 --dump ab12cd34": json.dumps(
+                {"ok": True, "route": "ax", "action": "press",
+                 "role": "push button", "name": "Save",
+                 "dump": "ab12cd34"})})
+
+        result = a11y.click_element(0, dump="ab12cd34")
+
+        self.assertEqual(runner.calls[-1][3:], ["0", "--dump", "ab12cd34"])
+        self.assertEqual(result.details["dump"], "ab12cd34")
+
     def test_px_fallback_warps_and_clicks(self):
         a11y, runner = make_a11y(responses={
             f"python3 {BRIDGE} click 0": json.dumps(
@@ -249,6 +261,26 @@ class TreeSnapshotTests(unittest.TestCase):
 
     def test_target_out_of_range_is_none(self):
         self.assertIsNone(TreeSnapshot.target([ROWS[0]], 5))
+
+    def test_the_dump_id_covers_the_ordered_identities(self):
+        one = [ROWS[0], ROWS[1]]
+
+        self.assertEqual(TreeSnapshot.digest(one), TreeSnapshot.digest(list(one)))
+        self.assertNotEqual(TreeSnapshot.digest(one),
+                            TreeSnapshot.digest(list(reversed(one))))
+        renamed = [dict(ROWS[0], name="Cancel"), ROWS[1]]
+        self.assertNotEqual(TreeSnapshot.digest(one),
+                            TreeSnapshot.digest(renamed))
+
+    def test_a_saved_dump_keeps_its_id(self):
+        rows = [ROWS[0], ROWS[1]]
+
+        TreeSnapshot.save(rows, self.path)
+        stored = TreeSnapshot.load(self.path)
+
+        assert stored is not None
+        self.assertEqual(TreeSnapshot.digest(stored),
+                         TreeSnapshot.digest(rows))
         self.assertIsNone(TreeSnapshot.target([ROWS[0]], -1))
         self.assertEqual(TreeSnapshot.target([ROWS[0]], 0),
                          TreeSnapshot.identity(ROWS[0]))
@@ -371,6 +403,7 @@ class TreeWalkerTests(unittest.TestCase):
         self.assertEqual([row["app"] for row in rows],
                          ["nautilus", "nautilus"])
         self.assertEqual(rows[0]["pid"], 4242)
+        self.assertEqual(rows[0]["dump"], TreeSnapshot.digest(rows))
 
 
 if __name__ == "__main__":

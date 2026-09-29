@@ -254,7 +254,7 @@ class Desktop:
 
     def close_apps(self, kind: str = "terminal", match: str = "",
                    keep: str = "", dry_run: bool = False,
-                   rounds: int = CLOSE_APP_ROUNDS) -> Outcome:
+                   rounds: int = CLOSE_APP_ROUNDS) -> Any:
         """Close every window of a kind, proving each one gone.
 
         Read the list, classify, close each by ADDRESS (a dispatcher named by
@@ -263,10 +263,9 @@ class Desktop:
         """
         selected = self.select_kind(self.windows(), kind, match, keep)
         if dry_run:
-            return Outcome.unverifiable(
-                "dispatch", ok=False, dry_run=True, kind=kind, match=match,
-                keep=keep, count=len(selected),
-                windows=[window.brief() for window in selected])
+            return {"dry_run": True, "kind": kind, "match": match,
+                    "keep": keep, "count": len(selected),
+                    "windows": [window.brief() for window in selected]}
         if not selected:
             return Outcome.confirmed("dispatch", kind=kind, match=match,
                                      keep=keep, closed=[], remaining=[],

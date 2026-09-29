@@ -109,7 +109,7 @@ have is `ERR[bad-args]`, never a silent no-op.
 | Screen | `screen [--monitor NAME] [--out DIR] [--no-cursor]` `region X Y W H` `active-screen [--window SPEC]` |
 | Windows | `switch N` `focus SPEC` `close [SPEC]` `close-apps --kind K [--match A] [--keep B] [--dry-run]` `move-window SPEC N` `wait-window [SPEC] [--gone] [--new] [--exclude A,B] [--title S] [--class S] [--stable N] [--timeout S]` |
 | Apps | `which NAME` `dir PATH [--create]` `app-open NAME [--workspace N] [--cwd DIR] [--timeout S] [--dry-run]` `launch [--workspace N] [--no-wait] [--timeout S] PROGRAM [ARGS…]` |
-| Pointer | `move X Y` `click [X Y] [--button L\|R\|M] [--double] [--el N]` `scroll DIR AMOUNT [X Y]` `drag X1 Y1 X2 Y2 [--button B] [--duration MS]` |
+| Pointer | `move X Y` `click [X Y] [--button L\|R\|M] [--double] [--el N] [--dump ID]` `scroll DIR AMOUNT [X Y]` `drag X1 Y1 X2 Y2 [--button B] [--duration MS]` |
 | Keyboard | `key COMBO [--ydotool]` `key-down COMBO` `key-up COMBO` `type TEXT [--delay MS]` |
 | AT-SPI | `a11y [--app S] [--max N]` `a11y-enable` |
 | Data | `clipboard get\|set\|clear\|types [--primary] [--type MIME] [--file PATH] [--out FILE]` |
@@ -151,7 +151,7 @@ Every code the CLI can raise (`ERR[code]: message` on stderr, exit 1):
 | `type` `ydotool` | the keyboard or pointer device refused |
 | `capture` `clipboard` | grim/wl-clipboard failed, or the capture is not a PNG |
 | `window-not-found` `ambiguous-window` `empty-desktop` | the target names none, or several — use `address:0x…`; an empty desktop has nothing to act on |
-| `focus-not-verified` `close-not-verified` `switch-not-verified` `move-not-verified` | the compositor answered ok and did not apply: re-read state, do not retry blindly |
+| `focus-not-verified` `close-not-verified` `switch-not-verified` `move-not-verified` `drag-not-verified` | the compositor answered ok and did not apply (a drag never reached its target): re-read state, do not retry blindly |
 | `wait-timeout` | the window did not appear (or did not go away) in time |
 | `monitor-not-found` `ambiguous-monitor` | no monitor, or several, match the name |
 | `app-unknown` `app-ambiguous` `app-open-failed` | the app entry is unclear, or it opened no window |

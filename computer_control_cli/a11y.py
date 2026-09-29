@@ -99,10 +99,14 @@ class A11y:
                 f"a11y-enable: IsEnabled is {got!r} after setting it true")
         return Outcome.confirmed("ax", IsEnabled=got)
 
-    def click_element(self, index: int, button: str = "L") -> Outcome:
+    def click_element(self, index: int, button: str = "L",
+                      dump: str = "") -> Outcome:
         """Invoke an element's AT-SPI action, or click its px fallback."""
+        extra = [str(int(index))]
+        if dump:
+            extra += ["--dump", str(dump)]
         try:
-            reply = json.loads(self.run("click", [str(int(index))]))
+            reply = json.loads(self.run("click", extra))
         except ValueError:
             raise ControlError("atspi",
                                f"click --el {index}: the bridge returned no "
@@ -124,6 +128,7 @@ class A11y:
                     "failed")
             return Outcome.unverifiable("ax", route="ax", element=int(index),
                                         action=reply.get("action"),
+                                        dump=reply.get("dump", ""),
                                         role=reply.get("role"),
                                         name=reply.get("name"),
                                         button=str(button).upper())
@@ -181,6 +186,7 @@ class A11y:
         return Outcome.unverifiable("px", route="px-fallback", element=int(index),
                                     x=x, y=y, role=reply.get("role"),
                                     name=reply.get("name"), pid=element_pid,
+                                    dump=reply.get("dump", ""),
                                     button=upper)
 
     @staticmethod

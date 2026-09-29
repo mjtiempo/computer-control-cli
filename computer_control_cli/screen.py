@@ -96,10 +96,15 @@ class Screen:
         width, height = self.png_size(data)
         directory = os.path.expanduser(out_dir)
         try:
-            os.makedirs(directory, exist_ok=True)
+            os.makedirs(directory, mode=0o700, exist_ok=True)
             path = os.path.join(directory,
                                 f"{prefix}_{int(time.time() * 1000)}.png")
-            with open(path, "wb") as handle:
+            # A capture is a picture of the whole desktop: 0600, and never
+            # through a symlink the caller did not mean to follow.
+            fd = os.open(path,
+                         os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                         0o600)
+            with os.fdopen(fd, "wb") as handle:
                 handle.write(data)
         except OSError as error:
             raise ControlError(

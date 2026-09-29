@@ -112,6 +112,8 @@ class CliActionTests(CliFixture):
         result = self.run_json("close-apps", "--kind", "terminal", "--dry-run")
 
         self.assertEqual(result["count"], 1)
+        self.assertTrue(result["dry_run"])
+        self.assertNotIn("ok", result, "a plan is not a failure")
 
     def test_move_window(self):
         result = self.run_json("move-window", "class:foot", "2")
@@ -820,6 +822,17 @@ class CliRefusalTests(CliFixture):
 
         self.assertEqual(code, 1)
         self.assertIn("ERR[empty-desktop]", stderr)
+
+    def test_log_refuses_a_non_regular_log(self):
+        config = Config(env={"CCC_LOG": self._tmp.name})    # a directory
+        stdout, stderr = io.StringIO(), io.StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = Cli(["log", "1"], session=self.session,
+                       config=config).run()
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[no-file]", stderr.getvalue())
 
     def test_the_global_timeout_reaches_the_verification_budget(self):
         self.hypr.honor_dispatches = False

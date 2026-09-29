@@ -2,6 +2,7 @@
 
 import json
 import os
+import stat
 import tempfile
 import unittest
 
@@ -253,6 +254,22 @@ class ActionLogTests(unittest.TestCase):
 
         with self.assertRaises(ControlError) as caught:
             next(log.follow(count=1, poll=0.01))
+
+        self.assertEqual(caught.exception.code, "no-file")
+
+    def test_the_log_is_private(self):
+        log = ActionLog(self.config)
+
+        log.write("switch", ok=True, args=[2])
+
+        mode = stat.S_IMODE(os.stat(self.path).st_mode)
+        self.assertEqual(mode, 0o600, "the action log is not world-readable")
+
+    def test_a_non_regular_log_refuses(self):
+        config = Config(env={"CCC_LOG": self._tmp.name})    # a directory
+
+        with self.assertRaises(ControlError) as caught:
+            ActionLog(config).entries(5)
 
         self.assertEqual(caught.exception.code, "no-file")
 
