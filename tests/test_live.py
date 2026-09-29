@@ -118,10 +118,16 @@ class LiveDesktopTests(unittest.TestCase):
         finally:
             self.input.move(origin["x"], origin["y"])
 
-    def test_scroll_emits_wheel_events(self):
+    def test_scroll_is_accepted_by_the_real_wheel_device(self):
+        # A wheel has no read-back: what this proves is that the evdev device
+        # opens and takes the event (a missing /dev/uinput or a bad script
+        # refuses ERR[ydotool] instead). Axis and sign are pinned
+        # hermetically in tests/test_input.py.
         result = self.input.scroll("down", 1)
 
         self.assertFalse(result.verified)  # honest: no read-back exists
+        self.assertEqual(result.rung, "input")
+        self.assertEqual(result.details["direction"], "down")
 
     # ------------------------------------------------------------ keyboard
     def test_clipboard_round_trip(self):

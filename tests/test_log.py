@@ -8,7 +8,7 @@ import unittest
 
 from computer_control_cli.config import Config  # pi-lens-ignore: reportMissingImports
 from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
-from computer_control_cli.log import ActionLog  # pi-lens-ignore: reportMissingImports
+from computer_control_cli.log import MAX_BYTES, ActionLog  # pi-lens-ignore: reportMissingImports
 
 
 class ActionLogTests(unittest.TestCase):
@@ -264,6 +264,17 @@ class ActionLogTests(unittest.TestCase):
 
         mode = stat.S_IMODE(os.stat(self.path).st_mode)
         self.assertEqual(mode, 0o600, "the action log is not world-readable")
+
+    def test_the_log_rotates_a_full_generation(self):
+        log = ActionLog(self.config)
+        with open(self.path, "w") as handle:
+            handle.write("x" * MAX_BYTES)
+
+        log.write("switch", ok=True, args=[2])
+
+        self.assertTrue(os.path.exists(self.path + ".1"))
+        self.assertEqual(os.path.getsize(self.path + ".1"), MAX_BYTES)
+        self.assertLess(os.path.getsize(self.path), 200)
 
     def test_a_non_regular_log_refuses(self):
         config = Config(env={"CCC_LOG": self._tmp.name})    # a directory

@@ -19,6 +19,10 @@ from computer_control_cli.config import Config  # pi-lens-ignore: reportMissingI
 from computer_control_cli.errors import ControlError  # pi-lens-ignore: reportMissingImports
 
 PREVIEW_CHARS = 8
+# One generation, replaced when the log grows past this: unbounded history is
+# a poor fit for a file that records window titles and paths, and every read
+# holds the whole file in memory.
+MAX_BYTES = 4 * 1024 * 1024
 # Reads that find the log but cannot open it: refuse rather than poll forever.
 UNREADABLE_TRIES = 3
 
@@ -47,6 +51,7 @@ class ActionLog:
             entry["detail"] = detail
         entry.update(self.text_fields(text))
         try:
+            self.rotate()
             directory = os.path.dirname(self.path())
             if directory:
                 os.makedirs(directory, mode=0o700, exist_ok=True)
@@ -61,6 +66,20 @@ class ActionLog:
                 handle.write(payload)
         except OSError:
             pass  # fail-open: the log must never fail the action
+
+    def rotate(self) -> None:
+        """Keep the log bounded: one generation, replaced at the size cap.
+
+        Fail-open like every other write — a log that cannot rotate must not
+        fail the action it describes. ``follow`` already treats a replaced
+        file as a restart, so a follower survives the rotation.
+        """
+        try:
+            if os.path.getsize(self.path()) < MAX_BYTES:
+                return
+            os.replace(self.path(), self.path() + ".1")
+        except OSError:
+            pass
 
     def text_fields(self, text: Optional[str]) -> dict[str, Any]:
         if text is None:

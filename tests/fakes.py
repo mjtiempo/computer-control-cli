@@ -128,6 +128,7 @@ class FakeHyprland:
         self.cursor = cursor
         self.honor_dispatches = True
         self.empty_active = False       # hyprctl answers {} when none is focused
+        self.close_unmaps = False        # a close-to-tray app keeps its row
         self.dispatch_log: list[str] = []
         self.spawn_on_exec: list[dict] = []
         self.calls: list[list[str]] = []
@@ -175,7 +176,8 @@ class FakeHyprland:
 
     def _active_client(self) -> Optional[dict]:
         return next((c for c in self.clients
-                     if c["address"] == self.active_address), None)
+                     if c["address"] == self.active_address
+                     and c.get("mapped", True)), None)
 
     def _dispatch(self, expression: str) -> str:
         self.dispatch_log.append(expression)
@@ -199,10 +201,14 @@ class FakeHyprland:
             return
         if expression.startswith("hl.dsp.focus("):
             if window:
+                if not any(client["address"] == window.group(1)
+                           for client in self.clients):
+                    raise LookupError(f"focus: no window {window.group(1)}")
                 self.active_address = window.group(1)
                 return
             if workspace:
                 self.active_workspace = int(workspace)
+                self._ensure_workspace(self.active_workspace)
                 return
         if expression.startswith("hl.dsp.window.close("):
             self._close(window.group(1) if window else self.active_address)
@@ -222,9 +228,26 @@ class FakeHyprland:
     def _close(self, address: str) -> None:
         if not address:
             return
-        self.clients = [c for c in self.clients if c["address"] != address]
+        if self.close_unmaps:
+            # a close-to-tray app: the window is gone, the client row is not
+            for client in self.clients:
+                if client["address"] == address:
+                    client["mapped"] = False
+        else:
+            self.clients = [c for c in self.clients
+                            if c["address"] != address]
         if self.active_address == address:
             self.active_address = ""
+
+    def _ensure_workspace(self, workspace_id: int) -> None:
+        """A real compositor creates the workspace it is told to focus."""
+        if any(row["id"] == workspace_id for row in self.workspaces):
+            return
+        focused = next((row["name"] for row in self.monitors
+                        if row.get("focused")), "")
+        self.workspaces.append({"id": workspace_id,
+                                "name": str(workspace_id),
+                                "monitor": focused, "windows": 0})
 
 
 class FakeInputRunner:

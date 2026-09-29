@@ -106,6 +106,24 @@ class FakeFidelityTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, "dispatch")
 
+    def test_focusing_a_vanished_address_is_a_compositor_error(self):
+        hypr = FakeHyprland(clients=[dict(c) for c in CLIENTS])
+        session = Session(env=ENV, runner=hypr, discoverer=FakeDiscoverer(ENV))
+
+        with self.assertRaises(ControlError) as caught:
+            session.dispatch(
+                'hl.dsp.focus({ window = "address:0xdead", follow = true })')
+
+        self.assertEqual(caught.exception.code, "dispatch")
+
+    def test_switching_to_a_fresh_workspace_creates_it(self):
+        desktop, _ = make_desktop()
+
+        result = desktop.switch(9)
+
+        self.assertTrue(result.verified)
+        self.assertIn(9, [workspace.id for workspace in desktop.workspaces()])
+
 
 class DesktopResolveTests(unittest.TestCase):
     def test_resolves_one_window(self):
@@ -211,6 +229,15 @@ class DesktopCloseTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, "close-not-verified")
 
+    def test_a_close_to_tray_window_is_confirmed(self):
+        hypr = FakeHyprland(clients=[dict(c) for c in CLIENTS])
+        hypr.close_unmaps = True
+        desktop, _ = make_desktop(hypr)
+
+        result = desktop.close("class:kate")
+
+        self.assertTrue(result.verified)
+
     def test_bare_close_closes_the_focused_window(self):
         desktop, hypr = make_desktop()
 
@@ -312,6 +339,17 @@ class DesktopCloseAppsTests(unittest.TestCase):
 
         self.assertFalse(result.ok)
         self.assertEqual(len(result.details["remaining"]), 1)
+
+    def test_a_window_that_hid_instead_of_dying_is_counted_closed(self):
+        hypr = FakeHyprland(clients=[dict(c) for c in CLIENTS])
+        hypr.close_unmaps = True
+        desktop, _ = make_desktop(hypr)
+
+        result = desktop.close_apps("terminal")
+
+        self.assertTrue(result.verified)
+        self.assertEqual(len(result.details["closed"]), 1)
+        self.assertEqual(result.details["remaining"], [])
 
 
 class DesktopWaitTests(unittest.TestCase):

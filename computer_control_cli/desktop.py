@@ -365,7 +365,14 @@ class Desktop:
         return window.address.lower() if window else ""
 
     def _open_addresses(self) -> set:
-        return {str(row.get("address", "")).lower() for row in self.clients()}
+        """The addresses of the MAPPED windows — the ones a user can see.
+
+        A client row outlives the window: a close-to-tray app keeps an
+        unmapped row, so reading back against every client row reports a
+        close that DID happen as a failure and counts a hidden window as
+        still open. This is the same set ``windows`` shows.
+        """
+        return {window.address.lower() for window in self.windows()}
 
     @staticmethod
     def _poll(condition, timeout: Optional[float] = None) -> bool:

@@ -64,6 +64,11 @@ class LiveCliTests(unittest.TestCase):
                 cls.cli.run("clipboard", "get"))["text"]
         except Exception:                                   # noqa: BLE001
             cls.original_clipboard = ""
+        try:
+            cls.original_primary = cls.json_of(
+                cls.cli.run("clipboard", "get", "--primary"))["text"]
+        except Exception:                                   # noqa: BLE001
+            cls.original_primary = ""
         cls.scratch = None
         if cls.launcher is not None:
             script = (f"read line; printf '%s' \"$line\" > "
@@ -85,6 +90,10 @@ class LiveCliTests(unittest.TestCase):
             cls.cli.run("clipboard", "set", cls.original_clipboard)
         else:
             cls.cli.run("clipboard", "clear")
+        if cls.original_primary:
+            cls.cli.run("clipboard", "set", cls.original_primary, "--primary")
+        else:
+            cls.cli.run("clipboard", "clear", "--primary")
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     # ------------------------------------------------------------- helpers
@@ -412,8 +421,10 @@ class LiveCliTests(unittest.TestCase):
 
     def test_key_hold_and_release(self):
         self.need_scratch()
-        # a throwaway scratch: the held chord types a letter somewhere safe
-        self.new_scratch(script="sleep 600")
+        # a throwaway scratch, FOCUSED: a held chord must type its letter
+        # there, not into whatever window the developer had focused
+        window = self.new_scratch(script="sleep 600")
+        self.ok("focus", f"address:{window['address']}")
 
         self.assertEqual(self.ok("key-down", "shift+a")["state"], "down")
         self.assertEqual(self.ok("key-up", "shift+a")["state"], "up")
