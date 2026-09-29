@@ -88,6 +88,9 @@ class TreeSnapshot:
         target = path or cls.path()
         try:
             fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+            if os.fstat(fd).st_uid != os.getuid():
+                os.close(fd)
+                return None
             with os.fdopen(fd) as handle:
                 stored = json.load(handle)
         except (OSError, ValueError):

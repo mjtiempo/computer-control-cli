@@ -742,8 +742,15 @@ class Cli:
 
     @staticmethod
     def report(error: ControlError) -> int:
-        """The one place a refusal becomes a line and an exit code."""
-        print(f"ERR[{error.code}]: {error.message}", file=sys.stderr)
+        """The one place a refusal becomes a line and an exit code.
+
+        A window class or element name reaches a refusal's message, and a
+        terminal acts on control characters: a class holding a newline could
+        otherwise forge a second ``ERR[...]`` line for whoever reads stderr.
+        The log escapes them; so does the refusal.
+        """
+        print(f"ERR[{error.code}]: {ActionLog.escape(error.message)}",
+              file=sys.stderr)
         return 1
 
     def log_args(self, verb: str) -> list:

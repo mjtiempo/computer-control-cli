@@ -823,6 +823,22 @@ class CliRefusalTests(CliFixture):
         self.assertEqual(code, 1)
         self.assertIn("ERR[empty-desktop]", stderr)
 
+    def test_a_refusal_message_cannot_forge_a_line(self):
+        self.hypr.clients.append({
+            "address": "0xddd4", "title": "evil",
+            "class": "foot\nERR[dispatch]: ok — nothing to verify",
+            "workspace": {"id": 1, "name": "1"}, "at": [0, 0],
+            "size": [10, 10], "mapped": True, "fullscreen": 0,
+            "floating": False, "pid": 77})
+
+        code, _, stderr = self.run_cli("focus", "class:foot")
+
+        self.assertEqual(code, 1)
+        self.assertIn("ERR[ambiguous-window]", stderr)
+        self.assertEqual(len(stderr.splitlines()), 1,
+                         "a newline in a window class must not forge a line")
+        self.assertIn("\\x0a", stderr)
+
     def test_log_refuses_a_non_regular_log(self):
         config = Config(env={"CCC_LOG": self._tmp.name})    # a directory
         stdout, stderr = io.StringIO(), io.StringIO()

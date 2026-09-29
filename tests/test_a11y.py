@@ -262,6 +262,14 @@ class TreeSnapshotTests(unittest.TestCase):
     def test_target_out_of_range_is_none(self):
         self.assertIsNone(TreeSnapshot.target([ROWS[0]], 5))
 
+    def test_load_refuses_a_symlink(self):
+        target = os.path.join(self._tmp.name, "elsewhere")
+        TreeSnapshot.save(ROWS, target)
+        link = os.path.join(self._tmp.name, "link")
+        os.symlink(target, link)
+
+        self.assertIsNone(TreeSnapshot.load(link))
+
     def test_the_dump_id_covers_the_ordered_identities(self):
         one = [ROWS[0], ROWS[1]]
 

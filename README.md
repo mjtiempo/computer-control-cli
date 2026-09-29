@@ -147,7 +147,7 @@ whole stack runs against a double.
 ## Testing
 
 ```bash
-python3 -m unittest                          # 340 hermetic checks, no desktop
+python3 -m unittest                          # the hermetic suite — no desktop
 CCC_LIVE=1 python3 -m unittest tests.test_live -v      # 12 service-level live checks
 CCC_LIVE=1 python3 -m unittest tests.test_live_cli -v  # 26 CLI-level live checks
 pyright                                      # static gate
