@@ -11,7 +11,8 @@ repo checkout.
 
 - Info verbs print one line of JSON on stdout; a refusal prints
   `ERR[code]: message` on stderr and exits 1. Exit 2 is a usage error
-  (argparse usage on stderr, e.g. an unknown verb), 130 is an interrupt.
+  (argparse usage on stderr, e.g. an unknown verb or a flag the verb does not
+  define), 130 is an interrupt.
 - Coordinates are **logical Hyprland pixels**, 1:1 with the screenshots
   (`grim -s 1`), so an X Y read from a screenshot clicks that pixel.
 - `<verb> --help` is the local truth for a verb's flags; this skill is the
@@ -179,5 +180,7 @@ Every code the CLI can raise (`ERR[code]: message` on stderr, exit 1):
 - Ambiguity refuses and names the candidates. Never pick "the first match".
 - A failure a caller can produce is `ERR[code]`, never a traceback. If you
   see a traceback, that is a bug in the CLI — report the code and message.
-- Unknown verb or misplaced global flag → exit 2 with usage on stderr; the
-  hint names the global flags and where they go.
+- An unknown verb, or a flag the verb does not define, is a usage error: exit
+  2 with argparse usage on stderr and no `ERR[]` line. A **global** flag placed
+  after the verb is `ERR[bad-args]` (exit 1) instead, and its message names the
+  globals and says they go before the verb.

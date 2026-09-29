@@ -53,8 +53,9 @@ reads still read), and `--timeout SEC` (the default timeout for waiting on a
 window and verifying a dispatch — 60 s; a verb's own `--timeout` wins).
 
 They go **before the VERB**: `computer-control --dry-run switch 2`. Everything
-after the verb belongs to the verb, so a flag the verb does not have is
-`ERR[bad-args]` rather than a global — and never a silent no-op. A `sequence`
+after the verb belongs to the verb: a global flag written there is
+`ERR[bad-args]`, naming the globals and where they go (never a silent no-op),
+and any other flag the verb does not define is a usage error, exit 2. A `sequence`
 step is a command line of its own, so it may carry them too, and they govern
 that step alone.
 

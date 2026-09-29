@@ -683,6 +683,17 @@ class CliGlobalFlagTests(CliFixture):
         self.assertIn("before the VERB", stderr)
         self.assertEqual(self.hypr.dispatch_log, [])
 
+    def test_an_unknown_verb_flag_is_a_usage_error(self):
+        code, stdout, stderr = self.run_cli("switch", "2", "--gone")
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("usage", stderr.lower())
+        self.assertNotIn("ERR[", stderr)
+        self.assertNotIn("go before the VERB", stderr,
+                         "the global-flag hint belongs to the global case")
+        self.assertEqual(self.hypr.dispatch_log, [])
+
     def test_dry_run_capture_with_out_writes_no_file(self):
         target = os.path.join(self._tmp.name, "shot.png")
 
