@@ -232,23 +232,29 @@ class Desktop:
             f'hl.dsp.window.move({{ window = "address:{window.address}", '
             f'workspace = {Session.lua_string(wanted)} }})')
         wanted_row = wanted.removeprefix("name:")
+        landed: Optional[str] = None      # where the window was last seen
 
         def is_there() -> bool:
+            nonlocal landed
             for row in self.clients():
                 if str(row.get("address", "")).lower() != window.address.lower():
                     continue
+                landed = self._workspace_label(row)
                 here = row.get("workspace")
                 here = here if isinstance(here, dict) else {}
                 return (str(here.get("id")) == wanted_row
                         or str(here.get("name")) == wanted_row)
+            landed = None
             return False
 
         seen = self._poll(is_there, timeout)
         if not seen:
+            where = (f"it is on {landed}" if landed
+                     else "it is no longer on the desktop")
             raise ControlError(
                 "move-not-verified",
                 f"move-window: {window.address} is not on workspace {wanted} "
-                "after the move dispatch")
+                f"after the move dispatch — {where}")
         return Outcome.confirmed("dispatch", address=window.address,
                                  workspace=wanted)
 
@@ -363,6 +369,19 @@ class Desktop:
     def _active_address(self) -> str:
         window = self.active()
         return window.address.lower() if window else ""
+
+    @staticmethod
+    def _workspace_label(row: dict) -> str:
+        """How a client row's workspace reads in a refusal."""
+        here = row.get("workspace")
+        here = here if isinstance(here, dict) else {}
+        name = str(here.get("name") or "")
+        number = str(here.get("id", ""))
+        if not number and not name:
+            return "an unnamed workspace"
+        if name and name != number:
+            return f"workspace {number or '?'} (name {name!r})"
+        return f"workspace {number or name}"
 
     def _open_addresses(self) -> set:
         """The addresses of the MAPPED windows — the ones a user can see.

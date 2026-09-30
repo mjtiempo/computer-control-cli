@@ -305,6 +305,29 @@ class DesktopMoveTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, "move-not-verified")
 
+    def test_a_move_that_did_not_take_says_where_the_window_is(self):
+        hypr = FakeHyprland(clients=[dict(c) for c in CLIENTS])
+        hypr.honor_dispatches = False
+        desktop, _ = make_desktop(hypr)
+
+        with self.assertRaises(ControlError) as caught:
+            desktop.move_window("class:kate", 1)
+
+        self.assertEqual(caught.exception.code, "move-not-verified")
+        self.assertIn("workspace 2", caught.exception.message,
+                      "the refusal must say where the window actually is")
+
+    def test_a_move_of_a_vanished_window_says_it_is_gone(self):
+        hypr = FakeHyprland(clients=[dict(c) for c in CLIENTS])
+        hypr.vanish_on_move = True
+        desktop, _ = make_desktop(hypr)
+
+        with self.assertRaises(ControlError) as caught:
+            desktop.move_window("class:kate", 1)
+
+        self.assertEqual(caught.exception.code, "move-not-verified")
+        self.assertIn("no longer on the desktop", caught.exception.message)
+
 
 class DesktopCloseAppsTests(unittest.TestCase):
     def test_dry_run_reports_and_closes_nothing(self):

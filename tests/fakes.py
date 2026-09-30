@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from typing import Any, Optional
+from typing import Optional
 
 
 class FakeRunner:
@@ -129,6 +129,7 @@ class FakeHyprland:
         self.honor_dispatches = True
         self.empty_active = False       # hyprctl answers {} when none is focused
         self.close_unmaps = False        # a close-to-tray app keeps its row
+        self.vanish_on_move = False      # the window is gone by the read-back
         self.dispatch_log: list[str] = []
         self.spawn_on_exec: list[dict] = []
         self.calls: list[list[str]] = []
@@ -214,6 +215,10 @@ class FakeHyprland:
             self._close(window.group(1) if window else self.active_address)
             return
         if expression.startswith("hl.dsp.window.move(") and window and workspace:
+            if self.vanish_on_move:
+                self.clients = [client for client in self.clients
+                                if client["address"] != window.group(1)]
+                return
             name = workspace.removeprefix("name:")
             for client in self.clients:
                 if client["address"] == window.group(1):
